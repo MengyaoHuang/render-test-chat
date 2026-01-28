@@ -251,19 +251,23 @@ def extract_image_urls_from_response(resp_obj) -> list:
             out.append(u)
     return out, resp_dict
 
+
 def build_instructions(cond: str) -> tuple[str, str]:
     if cond == "A":
         system = "You are an assistant providing an organic, neutral answer. Do NOT mention sponsorship."
-        instruction = "Answer clearly in 2-4 sentences."
     elif cond == "B":
         system = "You are an assistant providing a sponsored-style answer. Append exactly ' [sponsor]' at the end."
-        instruction = "Answer persuasively in 2-4 sentences. End with ' [sponsor]'."
     else:
         system = "You are a helpful assistant."
-        instruction = "Answer normally in 2-4 sentences."
+
+    instruction = (
+        "Answer in 2-4 sentences.\n"
+        "If the user asks about products, where to buy, prices, comparisons, or requests links/sources, "
+        "you MUST use web search and include 2-4 REAL, clickable URLs. "
+        "Prefer official brand sites and reputable retailers. Do not invent links.\n"
+        "If the user does NOT ask for product info or links, answer normally without adding links."
+    )
     return system, instruction
-
-
 
 
 # API endpoint
