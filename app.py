@@ -109,20 +109,79 @@ def chat_page():
     <meta charset="utf-8"/>
     <title>Research Chat</title>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
+
     <style>
-        body {{ font-family: Arial, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 12px; }}
+        body {{font-family: Arial, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 12px; }}
         .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
-        #log {{ border:1px solid #ddd; border-radius:10px; padding:12px; height: 460px; overflow:auto; background:#fafafa; }}
-        .msg {{ margin: 12px 0; padding: 10px; border-radius: 10px; background: white; border: 1px solid #eee; }}
-        .you b {{ color:#1a73e8; }}
-        .ai b {{ color:#188038; }}
+        /* Chat container */
+        #log {{
+            border:1px solid #ddd;
+            border-radius:12px;
+            padding:12px;
+            height: 460px;
+            overflow:auto;
+            background:#f6f7f9;
+        }}
+        /* Each message row (controls left/right alignment) */
+        .msg {{
+            display: flex;
+            margin: 10px 0;
+        }}
+        .msg.you {{ justify-content: flex-end; }}
+        .msg.ai  {{ justify-content: flex-start; }}
+
+        /* The bubble itself */
+        .bubble {{
+            max-width: 78%;
+            padding: 10px 12px;
+            border-radius: 14px;
+            line-height: 1.35;
+            border: 1px solid #e6e6e6;
+            background: #fff;
+            white-space: pre-wrap;      /* keeps line breaks */
+            word-break: break-word;     /* long URLs won't overflow */
+        }}
+
+        /* Bubble colors */
+        .msg.you .bubble {{
+            background: #e8f0fe;
+            border-color: #d2e3fc;
+        }}
+        .msg.ai .bubble {{
+            background: #ffffff;
+            border-color: #e6e6e6;
+        }}
+
+        /* Label line */
+        .label {{
+            font-weight: 700;
+            margin-bottom: 6px;
+            font-size: 13px;
+            opacity: 0.9;
+        }}
+        .msg.you .label {{ color:#1a73e8; }}
+        .msg.ai .label  {{ color:#188038; }}
+
+        /* Links list inside bubble */
+        .links {{
+            margin-top: 8px;
+            font-size: 13px;
+        }}
+        .links a {{
+            display: inline-block;
+            margin-right: 10px;
+            text-decoration: underline;
+        }}
+
+        /* Input row */
         .row {{ display:flex; gap:8px; margin-top: 12px; }}
         input {{ flex:1; padding:10px; border-radius:10px; border:1px solid #ccc; }}
         button {{ padding:10px 14px; border-radius:10px; border:1px solid #ccc; cursor:pointer; }}
         button:disabled {{ opacity:0.6; cursor:not-allowed; }}
+
         img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
-        .links a {{ display:inline-block; margin-right:10px; font-size: 13px; }}
     </style>
+
     </head>
     <body>
     <h2>Research Chat</h2>
