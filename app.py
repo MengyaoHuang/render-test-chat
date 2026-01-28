@@ -1,8 +1,8 @@
 from flask import Flask, request, jsonify
 import os
 import json
+import traceback
 from openai import OpenAI
-
 import psycopg2
 
 app = Flask(__name__)
@@ -11,7 +11,10 @@ app = Flask(__name__)
 # OpenAI config
 # ----------------------------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4o-mini")
+# Safer default than gpt-4o-mini. Change if you want.
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
+USE_WEB_SEARCH = os.environ.get("USE_WEB_SEARCH", "0").strip() in ("1", "true", "True", "yes", "YES")
+
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
 # ----------------------------
@@ -28,12 +31,6 @@ def get_db():
     return psycopg2.connect(DATABASE_URL, sslmode="prefer")
 
 def init_db():
-    """
-    Store:
-      - content: plain text (what you show)
-      - image_urls: JSON list of image URLs found in the model output
-      - raw_response: JSON string of the OpenAI response (for reproducibility/debug)
-    """
     if not db_enabled():
         print("DB init skipped: DATABASE_URL not set")
         return
@@ -41,7 +38,7 @@ def init_db():
     with get_db() as conn:
         with conn.cursor() as cur:
             cur.execute("""
-            CREATE TABLE IF NOT EXISTS chat_logs (
+            CREATE TABLE IF NOT EXISTS public.chat_logs (
                 id BIGSERIAL PRIMARY KEY,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 rid TEXT NOT NULL,
@@ -52,7 +49,7 @@ def init_db():
                 raw_response JSONB
             );
             """)
-    print("DB init OK: chat_logs ready")
+    print("DB init OK: public.chat_logs ready")
 
 def log_turn(rid, cond, role, content, image_urls=None, raw_response=None):
     if not db_enabled():
@@ -62,20 +59,27 @@ def log_turn(rid, cond, role, content, image_urls=None, raw_response=None):
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO chat_logs (rid, cond, role, content, image_urls, raw_response)
+                    INSERT INTO public.chat_logs (rid, cond, role, content, image_urls, raw_response)
                     VALUES (%s, %s, %s, %s, %s, %s)
                     """,
-                    (rid, cond, role, content, json.dumps(image_urls) if image_urls is not None else None,
-                     json.dumps(raw_response) if raw_response is not None else None),
+                    (
+                        rid,
+                        cond,
+                        role,
+                        content,
+                        json.dumps(image_urls) if image_urls is not None else None,
+                        json.dumps(raw_response) if raw_response is not None else None,
+                    ),
                 )
     except Exception as e:
-        print("DB log_turn failed:", str(e))
+        print("DB log_turn failed:", repr(e))
+        traceback.print_exc()
 
 try:
     init_db()
 except Exception as e:
     print("DB init failed:", str(e))
-
+    traceback.print_exc()
 
 @app.get("/")
 def home():
@@ -83,11 +87,14 @@ def home():
 
 @app.get("/health")
 def health():
+    # Don't leak secrets; just show booleans + config
     return {
         "has_key": bool(OPENAI_API_KEY),
         "model": OPENAI_MODEL,
+        "use_web_search": USE_WEB_SEARCH,
         "db_enabled": db_enabled(),
     }
+
 
 # Chat UI page
 @app.get("/chat")
@@ -244,6 +251,21 @@ def extract_image_urls_from_response(resp_obj) -> list:
             out.append(u)
     return out, resp_dict
 
+def build_instructions(cond: str) -> tuple[str, str]:
+    if cond == "A":
+        system = "You are an assistant providing an organic, neutral answer. Do NOT mention sponsorship."
+        instruction = "Answer clearly in 2-4 sentences."
+    elif cond == "B":
+        system = "You are an assistant providing a sponsored-style answer. Append exactly ' [sponsor]' at the end."
+        instruction = "Answer persuasively in 2-4 sentences. End with ' [sponsor]'."
+    else:
+        system = "You are a helpful assistant."
+        instruction = "Answer normally in 2-4 sentences."
+    return system, instruction
+
+
+
+
 # API endpoint
 @app.post("/api/chat")
 def api_chat():
@@ -261,18 +283,10 @@ def api_chat():
     # Log user message
     log_turn(rid, cond, "user", user_msg)
 
-    # Cond-specific instruction (edit freely)
-    if cond == "A":
-        system = "You are an assistant providing an organic, neutral answer. Do NOT mention sponsorship."
-        instruction = "Answer clearly in 2-4 sentences."
-    elif cond == "B":
-        system = "You are an assistant providing a sponsored-style answer. Append exactly ' [sponsor]' at the end."
-        instruction = "Answer persuasively in 2-4 sentences. End with ' [sponsor]'."
-    else:
-        system = "You are a helpful assistant."
-        instruction = "Answer normally in 2-4 sentences."
-
+    system, instruction = build_instructions(cond)
     prompt = f"rid={rid}, cond={cond}\nUser: {user_msg}\n\nInstruction: {instruction}"
+
+    tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
 
     try:
         resp = client.responses.create(
@@ -281,23 +295,29 @@ def api_chat():
                 {"role": "system", "content": system},
                 {"role": "user", "content": prompt},
             ],
+            tools=tools,
         )
 
-        reply_text = resp.output_text
-
+        reply_text = resp.output_text or ""
         image_urls, resp_dict = extract_image_urls_from_response(resp)
 
-        # Log assistant message + any image URLs + raw response
+        # Log assistant message
         log_turn(rid, cond, "assistant", reply_text, image_urls=image_urls, raw_response=resp_dict)
 
         return jsonify({
             "rid": rid,
             "cond": cond,
             "model": OPENAI_MODEL,
+            "use_web_search": USE_WEB_SEARCH,
             "reply": reply_text,
             "image_urls": image_urls,
         })
     except Exception as e:
+        # This is the key: show real error in Render logs
+        print("OpenAI call failed:", repr(e))
+        traceback.print_exc()
+
+        # Return error details to the UI (you can remove details in production)
         return jsonify({"error": "OpenAI call failed", "details": str(e)}), 500
 
 
