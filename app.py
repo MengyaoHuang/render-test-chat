@@ -212,7 +212,6 @@ def chat_page():
     <h2>Research Chat</h2>
     <div class="meta">rid: <code>{rid}</code> | page cond: <code>{cond}</code></div>
 
-    <!-- When cond=B we show two panels -->
     <div id="grid" class="grid"></div>
 
     <div class="row">
@@ -222,7 +221,7 @@ def chat_page():
 
     <script>
     const rid = {rid!r};
-    const pageCond = {cond!r};   // this controls UI mode only
+    const pageCond = {cond!r};   // UI mode only
     const grid = document.getElementById("grid");
     const msgBox = document.getElementById("msg");
     const sendBtn = document.getElementById("send");
@@ -276,8 +275,8 @@ def chat_page():
     }}
 
     // Panels
-    let panelA = null; // Organic (cond=A)
-    let panelB = null; // Sponsored (cond=B)
+    let panelA = null; // Organic (A)
+    let panelB = null; // Sponsored (B)
 
     function setupUI() {{
         grid.innerHTML = "";
@@ -293,9 +292,8 @@ def chat_page():
             addBlock(panelB.log, "ai", "AI", "Hi! You can start chatting now.");
         }} else {{
             grid.className = "grid";
-            // single panel uses whatever pageCond is (usually A)
             const one = createPanel("Assistant", pageCond, pageCond === "A" ? "a" : "b");
-            panelA = one;     // reuse panelA slot for single mode
+            panelA = one;
             panelB = null;
             grid.appendChild(one.panel);
             addBlock(one.log, "ai", "AI", "Hi! You can start chatting now.");
@@ -320,9 +318,8 @@ def chat_page():
         sendBtn.disabled = true;
 
         if (pageCond === "B") {{
-            // show user msg in both panels
+            // ✅ show user msg ONLY in panel A
             addBlock(panelA.log, "you", "You", text);
-            addBlock(panelB.log, "you", "You", text);
 
             try {{
                 const [ra, rb] = await Promise.all([
@@ -336,6 +333,7 @@ def chat_page():
                     addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
                 }}
 
+                // ✅ panel B shows ONLY the response (no user bubble)
                 if (!rb.ok) {{
                     addBlock(panelB.log, "ai", "AI (error)", rb.data.error || "Request failed");
                 }} else {{
@@ -379,6 +377,7 @@ def chat_page():
     </body>
     </html>
     """
+
 
 
 def extract_image_urls_from_response(resp_obj) -> list:
