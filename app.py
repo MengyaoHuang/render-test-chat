@@ -206,36 +206,26 @@ def chat_page():
     }}
 
     function linkify(escapedText) {{
-    let s = escapedText || "";
-    // 1) Markdown links: [text](https://url)
-    s = s.replace(/\[([^\]]+)\]\((https?:\/\/[^\s<>"')]+)\)/g, (m, text, url) => {{
-        return `<a href="${{url}}" target="_blank" rel="noopener noreferrer">${{text}}</a>`;
-    }});
-    // 2) Bare URLs: https://...
     const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
-    s = s.replace(urlRegex, (url) => {{
-        return `<a href="${{url}}" target="_blank" rel="noopener noreferrer">${{url}}</a>`;
+    return (escapedText || "").replace(urlRegex, function(url) {{
+        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
     }});
-    return s;
     }}
 
     function addBlock(cls, label, text, imageUrls=[]) {{
-        const row = document.createElement("div");
-        row.className = "msg " + cls;
+        const div = document.createElement("div");
+        div.className = "msg " + cls;
 
-        const bubble = document.createElement("div");
-        bubble.className = "bubble";
-
-        let html = '<div class="label">${{escapeHtml(label)}}:</div>';
-        html += '<div>${{linkify(escapeHtml(text))}}</div>';
+        let html = "<div><b>" + label + ":</b> " + linkify(escapeHtml(text)) + "</div>";
 
         if (imageUrls && imageUrls.length) {{
-            html += '<div class="links"><b>Images:</b> ';
-            for (const u of imageUrls) {{
+        html += '<div class="links"><b>Images:</b> ';
+        for (const u of imageUrls) {{
             html += '<a href="' + u + '" target="_blank" rel="noopener noreferrer">open</a>';
-            }}
-            html += "</div>";
-            html += '<img class="chatimg" src="' + imageUrls[0] + '" alt="result image"/>';
+        }}
+        html += "</div>";
+        // Optional: also inline render the first image (if browser allows)
+        html += '<img class="chatimg" src="' + imageUrls[0] + '" alt="result image"/>';
         }}
 
         bubble.innerHTML = html;
