@@ -109,7 +109,6 @@ def chat_page():
     <meta charset="utf-8"/>
     <title>Research Chat</title>
     <meta name="viewport" content="width=device-width, initial-scale=1"/>
-
     <style>
         body {{font-family: Arial, sans-serif; max-width: 860px; margin: 24px auto; padding: 0 12px; }}
         .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
@@ -181,7 +180,6 @@ def chat_page():
 
         img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
     </style>
-
     </head>
     <body>
     <h2>Research Chat</h2>
@@ -205,26 +203,30 @@ def chat_page():
         return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     }}
 
+    
     function addBlock(cls, label, text, imageUrls=[]) {{
-        const div = document.createElement("div");
-        div.className = "msg " + cls;
+    const row = document.createElement("div");
+    row.className = "msg " + cls;
 
-        let html = "<div><b>" + label + ":</b> " + escapeHtml(text) + "</div>";
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
 
-        if (imageUrls && imageUrls.length) {{
+    let html = `<div class="label">${{escapeHtml(label)}}</div>`;
+    html += `<div>${{escapeHtml(text)}}</div>`;
+
+    if (imageUrls && imageUrls.length) {{
         html += '<div class="links"><b>Images:</b> ';
         for (const u of imageUrls) {{
-            html += '<a href="' + u + '" target="_blank" rel="noopener noreferrer">open</a>';
+        html += `<a href="${{u}}" target="_blank" rel="noopener noreferrer">open</a>`;
         }}
         html += "</div>";
-        // Optional: also inline render the first image (if browser allows)
-        html += '<img class="chatimg" src="' + imageUrls[0] + '" alt="result image"/>';
-        }}
+        html += `<img class="chatimg" src="${{imageUrls[0]}}" alt="result image"/>`;
+    }}
 
-        bubble.innerHTML = html;
-        row.appendChild(bubble);
-        log.appendChild(row);
-        log.scrollTop = log.scrollHeight;
+    bubble.innerHTML = html;
+    row.appendChild(bubble);
+    log.appendChild(row);
+    log.scrollTop = log.scrollHeight;
     }}
 
     async function send() {{
