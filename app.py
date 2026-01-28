@@ -332,6 +332,42 @@ def build_instructions(cond: str) -> tuple[str, str]:
     return system, instruction
 
 
+def fetch_history(rid: str, limit: int = 20):
+    """
+    Load the most recent conversation turns for this rid from public.chat_logs.
+    Returns a list of {role, content} suitable for OpenAI Responses API.
+    """
+    if not db_enabled():
+        return []
+
+    try:
+        with get_db() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    SELECT role, content
+                    FROM public.chat_logs
+                    WHERE rid = %s
+                    ORDER BY id ASC
+                    """,
+                    (rid,),
+                )
+                rows = cur.fetchall()
+
+        # Keep only the last `limit` messages
+        rows = rows[-limit:]
+
+        out = []
+        for role, content in rows:
+            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
+                out.append({"role": role, "content": content})
+        return out
+
+    except Exception as e:
+        print("fetch_history failed:", repr(e))
+        traceback.print_exc()
+        return []
+
 # API endpoint
 @app.post("/api/chat")
 def api_chat():
@@ -350,17 +386,23 @@ def api_chat():
     log_turn(rid, cond, "user", user_msg)
 
     system, instruction = build_instructions(cond)
-    prompt = f"rid={rid}, cond={cond}\nUser: {user_msg}\n\nInstruction: {instruction}"
+
+    # IMPORTANT: with memory, don't embed rid/cond repeatedly into the user content
+    # (it will pollute the conversation). Keep instructions short & stable.
+    prompt = f"{user_msg}\n\nInstruction: {instruction}"
 
     tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
 
     try:
+        # Load recent history for this rid (includes the user message we just wrote)
+        history = fetch_history(rid, limit=20)
+
+        # Build messages: system + history
+        messages = [{"role": "system", "content": system}] + history
+
         resp = client.responses.create(
             model=OPENAI_MODEL,
-            input=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": prompt},
-            ],
+            input=messages,
             tools=tools,
         )
 
