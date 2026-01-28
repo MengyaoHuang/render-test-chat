@@ -206,8 +206,11 @@ def chat_page():
     }}
 
     function addBlock(cls, label, text, imageUrls=[]) {{
-        const div = document.createElement("div");
-        div.className = "msg " + cls;
+        const row = document.createElement("div");
+        row.className = "msg " + cls;
+
+        const bubble = document.createElement("div");
+        bubble.className = "bubble";
 
         let html = "<div><b>" + label + ":</b> " + escapeHtml(text) + "</div>";
 
@@ -221,11 +224,13 @@ def chat_page():
         html += '<img class="chatimg" src="' + imageUrls[0] + '" alt="result image"/>';
         }}
 
-        div.innerHTML = html;
-        log.appendChild(div);
+        bubble.innerHTML = html;
+        row.appendChild(bubble);
+        log.appendChild(row);
         log.scrollTop = log.scrollHeight;
     }}
 
+    
     async function send() {{
         const text = msgBox.value.trim();
         if (!text) return;
