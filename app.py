@@ -205,18 +205,11 @@ def chat_page():
         return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
     }}
 
-    function linkify(escapedText) {{
-    const urlRegex = /(https?:\/\/[^\s<>"']+)/g;
-    return (escapedText || "").replace(urlRegex, function(url) {{
-        return '<a href="' + url + '" target="_blank" rel="noopener noreferrer">' + url + '</a>';
-    }});
-    }}
-
     function addBlock(cls, label, text, imageUrls=[]) {{
         const div = document.createElement("div");
         div.className = "msg " + cls;
 
-        let html = "<div><b>" + label + ":</b> " + linkify(escapeHtml(text)) + "</div>";
+        let html = "<div><b>" + label + ":</b> " + escapeHtml(text) + "</div>";
 
         if (imageUrls && imageUrls.length) {{
         html += '<div class="links"><b>Images:</b> ';
