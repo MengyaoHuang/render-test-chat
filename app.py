@@ -37,40 +37,66 @@ def init_db():
 
     with get_db() as conn:
         with conn.cursor() as cur:
+            # 1) Create table if new (includes the latest schema)
             cur.execute("""
             CREATE TABLE IF NOT EXISTS public.chat_logs (
                 id BIGSERIAL PRIMARY KEY,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 rid TEXT NOT NULL,
+                -- UI assignment: "A" (one panel) or "B" (two panels)
                 cond TEXT NOT NULL,
+                -- which assistant produced this row: "A" (organic) or "B" (sponsored)
+                panel TEXT NOT NULL DEFAULT 'A',
+                -- optional flag (only meaningful when cond='B' and panel='A')
+                borrowed_ads_history BOOLEAN,
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 image_urls JSONB,
                 raw_response JSONB
             );
             """)
+
+            # 2) Migrations for existing tables (safe every boot)
+            # panel: add if missing (nullable first), backfill, then enforce NOT NULL + default
+            cur.execute("ALTER TABLE public.chat_logs ADD COLUMN IF NOT EXISTS panel TEXT;")
+            cur.execute("UPDATE public.chat_logs SET panel = 'A' WHERE panel IS NULL;")
+            cur.execute("ALTER TABLE public.chat_logs ALTER COLUMN panel SET DEFAULT 'A';")
+            cur.execute("ALTER TABLE public.chat_logs ALTER COLUMN panel SET NOT NULL;")
+            # borrowed_ads_history: add if missing (nullable is fine)
+            cur.execute("ALTER TABLE public.chat_logs ADD COLUMN IF NOT EXISTS borrowed_ads_history BOOLEAN;")
+        conn.commit()
+
     print("DB init OK: public.chat_logs ready")
 
-def log_turn(rid, cond, role, content, image_urls=None, raw_response=None):
+def log_turn(rid, cond, panel, role, content, image_urls=None, raw_response=None, borrowed_ads_history=None):
     if not db_enabled():
         return
+
+    cond = (cond or "A").strip().upper()
+    panel = (panel or "A").strip().upper()
+
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    INSERT INTO public.chat_logs (rid, cond, role, content, image_urls, raw_response)
-                    VALUES (%s, %s, %s, %s, %s, %s)
+                    INSERT INTO public.chat_logs
+                        (rid, cond, panel, borrowed_ads_history, role, content, image_urls, raw_response)
+                    VALUES
+                        (%s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         rid,
                         cond,
+                        panel,
+                        borrowed_ads_history,
                         role,
                         content,
                         json.dumps(image_urls) if image_urls is not None else None,
                         json.dumps(raw_response) if raw_response is not None else None,
                     ),
                 )
+            conn.commit()
     except Exception as e:
         print("DB log_turn failed:", repr(e))
         traceback.print_exc()
@@ -100,6 +126,9 @@ def chat_page():
     rid = request.args.get("rid", "missing")
     cond = request.args.get("cond", "A")
 
+    # NEW: read borrowed_ads_history from query string (only matters when cond=B)
+    borrowed_ads_history = request.args.get("borrowed", "")
+
     return f"""
     <!doctype html>
     <html>
@@ -111,7 +140,6 @@ def chat_page():
         body {{ font-family: Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 12px; }}
         .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
 
-        /* --- Layout --- */
         .grid {{
             display: grid;
             grid-template-columns: 1fr;
@@ -147,7 +175,6 @@ def chat_page():
         .badge.a {{ background: #e8f0fe; border-color: #d2e3fc; color: #1a73e8; }}
         .badge.b {{ background: #e6f4ea; border-color: #ceead6; color: #188038; }}
 
-        /* --- Chat box --- */
         .log {{
             padding: 12px;
             height: 460px;
@@ -221,7 +248,9 @@ def chat_page():
 
     <script>
     const rid = {rid!r};
-    const pageCond = {cond!r};   // UI mode only
+    const pageCond = {cond!r};   // UI assignment only: "A" or "B"
+    const borrowedAdsHistory = {borrowed_ads_history!r}; // pass-through from URL
+
     const grid = document.getElementById("grid");
     const msgBox = document.getElementById("msg");
     const sendBtn = document.getElementById("send");
@@ -274,9 +303,8 @@ def chat_page():
         logEl.scrollTop = logEl.scrollHeight;
     }}
 
-    // Panels
-    let panelA = null; // Organic (A)
-    let panelB = null; // Sponsored (B)
+    let panelA = null;
+    let panelB = null;
 
     function setupUI() {{
         grid.innerHTML = "";
@@ -292,19 +320,25 @@ def chat_page():
             addBlock(panelB.log, "ai", "AI", "Hi! You can start chatting now.");
         }} else {{
             grid.className = "grid";
-            const one = createPanel("Assistant", pageCond, pageCond === "A" ? "a" : "b");
-            panelA = one;
+            panelA = createPanel("Assistant", "A", "a");
             panelB = null;
-            grid.appendChild(one.panel);
-            addBlock(one.log, "ai", "AI", "Hi! You can start chatting now.");
+            grid.appendChild(panelA.panel);
+
+            addBlock(panelA.log, "ai", "AI", "Hi! You can start chatting now.");
         }}
     }}
 
-    async function callChatAPI(condToSend, userText) {{
+    async function callChatAPI(panelToSend, userText) {{
         const resp = await fetch("/api/chat", {{
             method: "POST",
             headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{ rid, cond: condToSend, msg: userText }})
+            body: JSON.stringify({{
+                rid,
+                cond: pageCond,              // ✅ UI assignment
+                panel: panelToSend,          // ✅ "A" or "B"
+                msg: userText,
+                borrowed_ads_history: borrowedAdsHistory
+            }})
         }});
         const data = await resp.json();
         return {{ ok: resp.ok, data }};
@@ -318,7 +352,6 @@ def chat_page():
         sendBtn.disabled = true;
 
         if (pageCond === "B") {{
-            // ✅ show user msg ONLY in panel A
             addBlock(panelA.log, "you", "You", text);
 
             try {{
@@ -327,18 +360,11 @@ def chat_page():
                     callChatAPI("B", text),
                 ]);
 
-                if (!ra.ok) {{
-                    addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
-                }} else {{
-                    addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
-                }}
+                if (!ra.ok) addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
+                else addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
 
-                // ✅ panel B shows ONLY the response (no user bubble)
-                if (!rb.ok) {{
-                    addBlock(panelB.log, "ai", "AI (error)", rb.data.error || "Request failed");
-                }} else {{
-                    addBlock(panelB.log, "ai", "AI", rb.data.reply || "", rb.data.image_urls || []);
-                }}
+                if (!rb.ok) addBlock(panelB.log, "ai", "AI (error)", rb.data.error || "Request failed");
+                else addBlock(panelB.log, "ai", "AI", rb.data.reply || "", rb.data.image_urls || []);
             }} catch (e) {{
                 addBlock(panelA.log, "ai", "AI (error)", String(e));
                 addBlock(panelB.log, "ai", "AI (error)", String(e));
@@ -347,16 +373,13 @@ def chat_page():
                 msgBox.focus();
             }}
         }} else {{
-            // single-panel mode
             addBlock(panelA.log, "you", "You", text);
 
             try {{
-                const r = await callChatAPI(pageCond, text);
-                if (!r.ok) {{
-                    addBlock(panelA.log, "ai", "AI (error)", r.data.error || "Request failed");
-                }} else {{
-                    addBlock(panelA.log, "ai", "AI", r.data.reply || "", r.data.image_urls || []);
-                }}
+                // ✅ single-panel always calls panel="A"
+                const r = await callChatAPI("A", text);
+                if (!r.ok) addBlock(panelA.log, "ai", "AI (error)", r.data.error || "Request failed");
+                else addBlock(panelA.log, "ai", "AI", r.data.reply || "", r.data.image_urls || []);
             }} catch (e) {{
                 addBlock(panelA.log, "ai", "AI (error)", String(e));
             }} finally {{
@@ -377,8 +400,6 @@ def chat_page():
     </body>
     </html>
     """
-
-
 
 def extract_image_urls_from_response(resp_obj) -> list:
     """
@@ -423,11 +444,12 @@ def extract_image_urls_from_response(resp_obj) -> list:
             out.append(u)
     return out, resp_dict
 
+def build_instructions(panel: str) -> tuple[str, str]:
+    panel = (panel or "A").strip().upper()
 
-def build_instructions(cond: str) -> tuple[str, str]:
-    if cond == "A":
+    if panel == "A":
         system = "You are an assistant providing an organic, neutral answer. Do NOT mention sponsorship."
-    elif cond == "B":
+    elif panel == "B":
         system = "You are an assistant providing a sponsored-style answer. Append exactly ' [sponsor]' at the end."
     else:
         system = "You are a helpful assistant."
@@ -441,74 +463,174 @@ def build_instructions(cond: str) -> tuple[str, str]:
     )
     return system, instruction
 
-
-def fetch_history(rid: str, limit: int = 20):
+def fetch_history(rid: str, panels: list[str], limit: int = 30):
     """
-    Load the most recent conversation turns for this rid from public.chat_logs.
-    Returns a list of {role, content} suitable for OpenAI Responses API.
+    Fetch history for a given rid, filtered by which PANEL(s) to include:
+      panels=["A"]      -> organic panel only (assistant A + user turns)
+      panels=["A","B"]  -> both panels (assistant A + assistant B + user turns)
+
+    Important behavior:
+    - De-dupes consecutive identical user turns (in case older data has duplicates).
+    - Labels assistant messages when both panels are included so the model can distinguish sources.
     """
     if not db_enabled():
         return []
+    if not panels:
+        return []
+
+    panels = [str(p).strip().upper() for p in panels if p and str(p).strip()]
+    panels = [p for p in panels if p in ("A", "B")]
+    if not panels:
+        return []
+
+    include_both = ("A" in panels and "B" in panels)
+
+    # Fetch more than needed, because we may drop duplicates during cleaning
+    fetch_n = max(limit * 4, 80)
 
     try:
         with get_db() as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
-                    SELECT role, content
+                    SELECT id, panel, role, content
                     FROM public.chat_logs
                     WHERE rid = %s
+                      AND panel = ANY(%s::text[])
                     ORDER BY id ASC
                     """,
-                    (rid,),
+                    (rid, panels),
                 )
                 rows = cur.fetchall()
 
-        # Keep only the last `limit` messages
-        rows = rows[-limit:]
+        rows = rows[-fetch_n:]
 
         out = []
-        for role, content in rows:
-            if role in ("user", "assistant") and isinstance(content, str) and content.strip():
-                out.append({"role": role, "content": content})
-        return out
+        prev_user_content = None
+
+        for _id, panel, role, content in rows:
+            if role not in ("user", "assistant"):
+                continue
+            if not isinstance(content, str) or not content.strip():
+                continue
+
+            panel = (panel or "A").strip().upper()
+
+            if role == "user":
+                # De-dupe consecutive identical user turns
+                if prev_user_content == content:
+                    continue
+                prev_user_content = content
+                out.append({"role": "user", "content": content})
+            else:
+                # assistant
+                prev_user_content = None
+                if include_both:
+                    tag = "[Organic]" if panel == "A" else "[Sponsored]"
+                    out.append({"role": "assistant", "content": f"{tag} {content}"})
+                else:
+                    out.append({"role": "assistant", "content": content})
+
+        return out[-limit:]
 
     except Exception as e:
         print("fetch_history failed:", repr(e))
         traceback.print_exc()
         return []
 
-# API endpoint
+
 @app.post("/api/chat")
 def api_chat():
     if client is None:
         return jsonify({"error": "OPENAI_API_KEY not set on server"}), 500
 
     data = request.get_json(silent=True) or {}
+
     rid = (data.get("rid") or "missing").strip()
-    cond = (data.get("cond") or "A").strip()
+    cond = (data.get("cond") or "A").strip().upper()      # participant assignment: "A" or "B"
+    panel = (data.get("panel") or "A").strip().upper()    # assistant being called: "A" or "B"
     user_msg = (data.get("msg") or "").strip()
+
+    borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
+    borrowed_ads_history = borrowed_raw in ("1", "true", "yes", "y", "t")
 
     if not user_msg:
         return jsonify({"error": "Missing msg"}), 400
 
-    # Log user message
-    log_turn(rid, cond, "user", user_msg)
+    # Guardrails
+    if cond not in ("A", "B"):
+        return jsonify({"error": f"Invalid cond: {cond}"}), 400
+    if panel not in ("A", "B"):
+        return jsonify({"error": f"Invalid panel: {panel}"}), 400
+    if cond == "A" and panel == "B":
+        return jsonify({"error": "Invalid: cond=A (single-panel) should not call panel B"}), 400
 
-    system, instruction = build_instructions(cond)
+    # ----------------------------
+    # Logging rule (IMPORTANT)
+    # ----------------------------
+    # Log the user turn ONLY ONCE to avoid duplicate user messages in memory.
+    # We log user turns under panel="A" always.
+    # Panel B will still see the user turns because it fetches panels ["A","B"].
+    try:
+        if panel == "A":
+            log_turn(
+                rid=rid,
+                cond=cond,
+                panel="A",
+                role="user",
+                content=user_msg,
+                borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+            )
+    except Exception:
+        # If your log_turn signature differs, fail quietly (but you should keep it consistent)
+        pass
 
-    # IMPORTANT: with memory, don't embed rid/cond repeatedly into the user content
-    # (it will pollute the conversation). Keep instructions short & stable.
-    prompt = f"{user_msg}\n\nInstruction: {instruction}"
+    # Instructions depend on which assistant we are calling
+    system, instruction = build_instructions(panel)
+
+    # ----------------------------
+    # History visibility rules
+    # ----------------------------
+    # Panel B ALWAYS sees both assistant histories.
+    # Panel A sees both only if (cond=B and borrowed_ads_history=True). Otherwise A-only + "can't reference B".
+    if panel == "B":
+        allowed_panels = ["A", "B"]
+        saw_b_history = True
+        system_final = system
+    else:
+        # panel == "A"
+        if cond == "B" and borrowed_ads_history:
+            allowed_panels = ["A", "B"]
+            saw_b_history = True
+            system_final = system
+        else:
+            allowed_panels = ["A"]
+            saw_b_history = False
+            system_final = (
+                system
+                + "\n\nIMPORTANT: You do NOT have access to any sponsored-panel (B) content. "
+                  "Do NOT mention, imply, summarize, or refer to anything from panel B. "
+                  "If asked what the sponsored assistant said, say you cannot access it."
+            )
+
+    # Put task instruction in system so it always applies even with history
+    system_final = system_final + "\n\n" + instruction
 
     tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
 
     try:
-        # Load recent history for this rid (includes the user message we just wrote)
-        history = fetch_history(rid, limit=20)
+        history = fetch_history(rid, panels=allowed_panels, limit=30)
 
-        # Build messages: system + history
-        messages = [{"role": "system", "content": system}] + history
+        # If DB is off or history is empty, we must include the user message explicitly
+        messages = [{"role": "system", "content": system_final}]
+        if history:
+            messages += history
+            # Make sure the current user turn is present (it should be, if panel A logged it).
+            # If not present (e.g., panel=B call first, or DB disabled), append it.
+            if history[-1]["role"] != "user" or history[-1]["content"].strip() != user_msg:
+                messages.append({"role": "user", "content": user_msg})
+        else:
+            messages.append({"role": "user", "content": user_msg})
 
         resp = client.responses.create(
             model=OPENAI_MODEL,
@@ -519,25 +641,150 @@ def api_chat():
         reply_text = resp.output_text or ""
         image_urls, resp_dict = extract_image_urls_from_response(resp)
 
-        # Log assistant message
-        log_turn(rid, cond, "assistant", reply_text, image_urls=image_urls, raw_response=resp_dict)
+        # Log assistant response under the panel that produced it
+        log_turn(
+            rid=rid,
+            cond=cond,
+            panel=panel,
+            role="assistant",
+            content=reply_text,
+            image_urls=image_urls,
+            raw_response=resp_dict,
+            borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+        )
 
         return jsonify({
             "rid": rid,
-            "cond": cond,
+            "cond": cond,  # participant assignment
+            "panel": panel,
+            "borrowed_ads_history": borrowed_ads_history if cond == "B" else None,
+            "saw_b_history": saw_b_history,
             "model": OPENAI_MODEL,
             "use_web_search": USE_WEB_SEARCH,
             "reply": reply_text,
             "image_urls": image_urls,
         })
+
     except Exception as e:
-        # This is the key: show real error in Render logs
         print("OpenAI call failed:", repr(e))
         traceback.print_exc()
-
-        # Return error details to the UI (you can remove details in production)
         return jsonify({"error": "OpenAI call failed", "details": str(e)}), 500
 
+
+# @app.post("/api/chat")
+# def api_chat():
+#     if client is None:
+#         return jsonify({"error": "OPENAI_API_KEY not set on server"}), 500
+
+#     data = request.get_json(silent=True) or {}
+
+#     rid = (data.get("rid") or "missing").strip()
+#     cond = (data.get("cond") or "A").strip().upper()      # participant assignment: "A" or "B"
+#     panel = (data.get("panel") or "A").strip().upper()    # assistant panel being called: "A" or "B"
+#     user_msg = (data.get("msg") or "").strip()
+
+#     borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
+#     borrowed_ads_history = borrowed_raw in ("1", "true", "yes", "y", "t")
+
+#     if not user_msg:
+#         return jsonify({"error": "Missing msg"}), 400
+
+#     # Guardrails
+#     if cond not in ("A", "B"):
+#         return jsonify({"error": f"Invalid cond: {cond}"}), 400
+#     if panel not in ("A", "B"):
+#         return jsonify({"error": f"Invalid panel: {panel}"}), 400
+#     if cond == "A" and panel == "B":
+#         return jsonify({"error": "Invalid: cond=A (single-panel) should not call panel B"}), 400
+
+#     # ✅ Always log the user message under the panel being called
+#     # (Because in cond=B you are calling /api/chat twice, once per panel.)
+#     log_turn(
+#         rid=rid,
+#         cond=cond,
+#         panel=panel,
+#         role="user",
+#         content=user_msg,
+#         borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+#     )
+
+#     system, instruction = build_instructions(panel)
+
+#     # History rules (by PANEL):
+#     # - Panel B always sees panels A+B
+#     # - Panel A:
+#     #     * if cond=B and borrowed_ads_history==True -> sees A+B
+#     #     * else -> sees A only, plus explicit "cannot access B" rule
+#     if panel == "B":
+#         allowed_panels = ["A", "B"]
+#         saw_b_history = True
+#         system_final = system
+#     else:
+#         # panel == "A"
+#         if cond == "B" and borrowed_ads_history:
+#             allowed_panels = ["A", "B"]
+#             saw_b_history = True
+#             system_final = system
+#         else:
+#             allowed_panels = ["A"]
+#             saw_b_history = False
+#             system_final = (
+#                 system
+#                 + "\n\nIMPORTANT: Here we do NOT have access to any sponsored-panel (B) content. "
+#                   "If asked about sponsored content or what the sponsored assistant said, "
+#                   "we cannot access it."
+#             )
+
+#     # ✅ Put instruction into system so it always applies (even with history)
+#     system_final = system_final + "\n\n" + instruction
+
+#     tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
+
+#     try:
+#         # ✅ Fetch history by panels (NOT by cond)
+#         history = fetch_history(rid, panels=allowed_panels, limit=30)
+
+#         # ✅ Always send system + history
+#         # history already includes the user message we just inserted
+#         messages = [{"role": "system", "content": system_final}] + history
+
+#         resp = client.responses.create(
+#             model=OPENAI_MODEL,
+#             input=messages,
+#             tools=tools,
+#         )
+
+#         reply_text = resp.output_text or ""
+#         image_urls, resp_dict = extract_image_urls_from_response(resp)
+
+#         # Log assistant response
+#         log_turn(
+#             rid=rid,
+#             cond=cond,
+#             panel=panel,
+#             role="assistant",
+#             content=reply_text,
+#             image_urls=image_urls,
+#             raw_response=resp_dict,
+#             borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+#         )
+
+#         return jsonify({
+#             "rid": rid,
+#             "cond": cond,  # participant assignment
+#             "panel": panel,
+#             "borrowed_ads_history": borrowed_ads_history if cond == "B" else None,
+#             "saw_b_history": saw_b_history,
+#             "model": OPENAI_MODEL,
+#             "use_web_search": USE_WEB_SEARCH,
+#             "reply": reply_text,
+#             "image_urls": image_urls,
+#         })
+
+#     except Exception as e:
+#         print("OpenAI call failed:", repr(e))
+#         traceback.print_exc()
+#         return jsonify({"error": "OpenAI call failed", "details": str(e)}), 500
 
 @app.get("/example")
 def example():
