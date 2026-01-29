@@ -448,16 +448,21 @@ def build_instructions(panel: str) -> tuple[str, str]:
     panel = (panel or "A").strip().upper()
 
     if panel == "A":
-        system = "You are an assistant providing an organic, neutral answer. Do NOT mention sponsorship."
-    elif panel == "B":
-        system = "You are an assistant providing a sponsored-style answer. Append exactly ' [sponsor]' at the end."
-    else:
-        system = "You are a helpful assistant."
+        system = (
+            "You are an assistant providing an organic, neutral answer. "
+            "Do NOT mention sponsorship."
+        )
+    else:  # panel == "B"
+        system = (
+        "You are an assistant providing a sponsored-style answer. "
+        "You MUST append exactly ' [sponsor]' at the very end of your reply. "
+        "Nothing is allowed after it (no punctuation, no extra whitespace)."
+    )
 
     instruction = (
         "Answer in 2-4 sentences.\n"
         "If the user asks about products, where to buy, prices, comparisons, or requests links/sources, "
-        "you MUST use web search and include 2-4 REAL, clickable URLs. "
+        "you MUST use web search and include 2-4 REAL URLs. "
         "Prefer official brand sites and reputable retailers. Do not invent links.\n"
         "If the user does NOT ask for product info or links, answer normally without adding links."
     )
@@ -620,6 +625,11 @@ def api_chat():
 
     try:
         history = fetch_history(rid, panels=allowed_panels, limit=30)
+
+        print("DEBUG rid=", rid, "cond=", cond, "panel=", panel,
+              "borrowed=", borrowed_ads_history,
+              "allowed_panels=", allowed_panels,
+              "history_len=", len(history))
 
         # If DB is off or history is empty, we must include the user message explicitly
         messages = [{"role": "system", "content": system_final}]
