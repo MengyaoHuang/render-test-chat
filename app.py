@@ -154,7 +154,7 @@ def chat_page():
 <title>Research Chat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  body {{ font-family: Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 12px; }}
+  body {{ font-family: Arial, sans-serif; max-width: 1400px; margin: 24px auto; padding: 0 12px; }}
   .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
 
   .grid {{
@@ -195,7 +195,7 @@ def chat_page():
 
   .log {{
     padding: 12px;
-    height: 460px;
+    height: 560px;
     overflow: auto;
     background: #f6f7f9;
   }}
