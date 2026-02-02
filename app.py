@@ -154,7 +154,7 @@ def chat_page():
 <title>Research Chat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  body {{ font-family: Arial, sans-serif; max-width: 1400px; margin: 24px auto; padding: 0 12px; }}
+  body {{ font-family: Arial, sans-serif; max-width: 1300px; margin: 24px auto; padding: 0 12px; }}
   .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
 
   .grid {{
@@ -163,9 +163,7 @@ def chat_page():
     gap: 12px;
     align-items: start;
   }}
-  .grid.two {{
-    grid-template-columns: 1fr 340px; /* left big, right narrow banner */
-  }}
+  .grid.two {{ grid-template-columns: 3fr 2fr; }}     /* ~60% / 40% */
 
   .panel {{
     border: 1px solid #ddd;
@@ -248,72 +246,73 @@ def chat_page():
 
   img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
 
-  /* ------- Sponsored banner styles ------- */
-  .panel.banner {{
-    border: 1px solid #111827;
-    background: #0b1220;
-  }}
-  .panel.banner .panelHeader {{
-    background: #0b1220;
-    border-bottom: 1px solid rgba(255,255,255,0.08);
-    color: #e5e7eb;
-  }}
-  .panel.banner .badge {{
-    border-color: rgba(255,255,255,0.14);
-    color: #e5e7eb;
-    background: rgba(255,255,255,0.06);
-  }}
-  .log.bannerLog {{
-    background: #0b1220;
-    color: #e5e7eb;
-  }}
-  .sponsorHint {{
+  /* ------- Sponsored banner styles (slightly lighter dark) ------- */
+    .panel.banner {{
+    border: 1px solid rgba(255,255,255,0.08);
+    background: #111827; /* lighter than #0b1220 */
+    }}
+    .panel.banner .panelHeader {{
+    background: #111827;
+    border-bottom: 1px solid rgba(255,255,255,0.10);
+    color: #f3f4f6;
+    }}
+    .panel.banner .badge {{
+    border-color: rgba(255,255,255,0.16);
+    color: #f3f4f6;
+    background: rgba(255,255,255,0.08);
+    }}
+    .log.bannerLog {{
+    background: #111827;
+    color: #f3f4f6;
+    }}
+    .sponsorHint {{
     font-size: 12px;
-    color: rgba(229,231,235,0.75);
+    color: rgba(243,244,246,0.75);
     margin-top: 2px;
     font-weight: 500;
     line-height: 1.35;
-  }}
-  .sCard {{
-    border: 1px solid rgba(255,255,255,0.10);
-    background: rgba(255,255,255,0.06);
+    }}
+    .sCard {{
+    border: 1px solid rgba(255,255,255,0.12);
+    background: rgba(255,255,255,0.08); /* slightly brighter cards */
     border-radius: 12px;
     padding: 10px 10px;
     margin: 10px 0;
-  }}
-  .sTitle {{
+    }}
+    .sTitle {{
     font-weight: 800;
     font-size: 13px;
     margin-bottom: 6px;
-  }}
-  .sWhy {{
+    }}
+    .sWhy {{
     font-size: 12.5px;
-    color: rgba(229,231,235,0.85);
+    color: rgba(243,244,246,0.82);
     margin-bottom: 8px;
     line-height: 1.35;
-  }}
-  .sCtaRow {{
+    }}
+    .sCtaRow {{
     display: flex;
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
-  }}
-  .sBtn {{
+    }}
+    .sBtn {{
     display: inline-block;
     font-size: 12px;
     font-weight: 800;
     padding: 6px 10px;
     border-radius: 999px;
-    border: 1px solid rgba(255,255,255,0.16);
-    background: rgba(255,255,255,0.10);
-    color: #e5e7eb;
+    border: 1px solid rgba(255,255,255,0.18);
+    background: rgba(255,255,255,0.14); /* brighter CTA chip */
+    color: #f3f4f6;
     text-decoration: none;
-  }}
-  .sLink {{
+    }}
+    .sLink {{
     font-size: 12px;
     color: rgba(147,197,253,0.95);
     text-decoration: underline;
-  }}
+    }}
+
 </style>
 </head>
 <body>
