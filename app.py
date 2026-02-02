@@ -11,7 +11,6 @@ app = Flask(__name__)
 # OpenAI config
 # ----------------------------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
-# Safer default than gpt-4o-mini. Change if you want.
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
 USE_WEB_SEARCH = os.environ.get("USE_WEB_SEARCH", "0").strip() in ("1", "true", "True", "yes", "YES")
 
@@ -22,13 +21,17 @@ client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 # ----------------------------
 DATABASE_URL = os.environ.get("DATABASE_URL", "")
 
+
 def db_enabled() -> bool:
     return bool(DATABASE_URL)
+
 
 def get_db():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL not set")
+    # Render typically supports sslmode=require; prefer keeps it flexible.
     return psycopg2.connect(DATABASE_URL, sslmode="prefer")
+
 
 def init_db():
     if not db_enabled():
@@ -37,38 +40,47 @@ def init_db():
 
     with get_db() as conn:
         with conn.cursor() as cur:
-            # 1) Create table if new (includes the latest schema)
-            cur.execute("""
+            # Create table if missing (latest schema)
+            cur.execute(
+                """
             CREATE TABLE IF NOT EXISTS public.chat_logs (
                 id BIGSERIAL PRIMARY KEY,
                 created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                 rid TEXT NOT NULL,
-                -- UI assignment: "A" (one panel) or "B" (two panels)
                 cond TEXT NOT NULL,
-                -- which assistant produced this row: "A" (organic) or "B" (sponsored)
                 panel TEXT NOT NULL DEFAULT 'A',
-                -- optional flag (only meaningful when cond='B' and panel='A')
                 borrowed_ads_history BOOLEAN,
                 role TEXT NOT NULL CHECK (role IN ('user', 'assistant')),
                 content TEXT NOT NULL,
                 image_urls JSONB,
                 raw_response JSONB
             );
-            """)
+            """
+            )
 
-            # 2) Migrations for existing tables (safe every boot)
-            # panel: add if missing (nullable first), backfill, then enforce NOT NULL + default
+            # Migrations (safe on every boot)
             cur.execute("ALTER TABLE public.chat_logs ADD COLUMN IF NOT EXISTS panel TEXT;")
             cur.execute("UPDATE public.chat_logs SET panel = 'A' WHERE panel IS NULL;")
             cur.execute("ALTER TABLE public.chat_logs ALTER COLUMN panel SET DEFAULT 'A';")
             cur.execute("ALTER TABLE public.chat_logs ALTER COLUMN panel SET NOT NULL;")
-            # borrowed_ads_history: add if missing (nullable is fine)
+
             cur.execute("ALTER TABLE public.chat_logs ADD COLUMN IF NOT EXISTS borrowed_ads_history BOOLEAN;")
+
         conn.commit()
 
     print("DB init OK: public.chat_logs ready")
 
-def log_turn(rid, cond, panel, role, content, image_urls=None, raw_response=None, borrowed_ads_history=None):
+
+def log_turn(
+    rid,
+    cond,
+    panel,
+    role,
+    content,
+    image_urls=None,
+    raw_response=None,
+    borrowed_ads_history=None,
+):
     if not db_enabled():
         return
 
@@ -101,19 +113,21 @@ def log_turn(rid, cond, panel, role, content, image_urls=None, raw_response=None
         print("DB log_turn failed:", repr(e))
         traceback.print_exc()
 
+
 try:
     init_db()
 except Exception as e:
     print("DB init failed:", str(e))
     traceback.print_exc()
 
+
 @app.get("/")
 def home():
     return "Render is live ✅"
 
+
 @app.get("/health")
 def health():
-    # Don't leak secrets; just show booleans + config
     return {
         "has_key": bool(OPENAI_API_KEY),
         "model": OPENAI_MODEL,
@@ -121,303 +135,419 @@ def health():
         "db_enabled": db_enabled(),
     }
 
+
+# ----------------------------
+# Chat UI
+# ----------------------------
 @app.get("/chat")
 def chat_page():
     rid = request.args.get("rid", "missing")
-    cond = request.args.get("cond", "A")
+    cond = request.args.get("cond", "A")  # "A" single panel, "B" two-panel (organic + sponsor banner)
 
-    # NEW: read borrowed_ads_history from query string (only matters when cond=B)
-    borrowed_ads_history = request.args.get("borrowed", "")
+    borrowed_ads_history = request.args.get("borrowed", "")  # pass-through (optional)
 
     return f"""
-    <!doctype html>
-    <html>
-    <head>
-    <meta charset="utf-8"/>
-    <title>Research Chat</title>
-    <meta name="viewport" content="width=device-width, initial-scale=1"/>
-    <style>
-        body {{ font-family: Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 12px; }}
-        .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
+<!doctype html>
+<html>
+<head>
+<meta charset="utf-8"/>
+<title>Research Chat</title>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<style>
+  body {{ font-family: Arial, sans-serif; max-width: 1100px; margin: 24px auto; padding: 0 12px; }}
+  .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
 
-        .grid {{
-            display: grid;
-            grid-template-columns: 1fr;
-            gap: 12px;
-        }}
-        .grid.two {{
-            grid-template-columns: 1fr 1fr;
-        }}
+  .grid {{
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 12px;
+    align-items: start;
+  }}
+  .grid.two {{
+    grid-template-columns: 1fr 340px; /* left big, right narrow banner */
+  }}
 
-        .panel {{
-            border: 1px solid #ddd;
-            border-radius: 14px;
-            overflow: hidden;
-            background: #fff;
-        }}
-        .panelHeader {{
-            padding: 10px 12px;
-            font-weight: 700;
-            border-bottom: 1px solid #eee;
-            background: #fafafa;
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            gap: 10px;
-        }}
-        .badge {{
-            font-size: 12px;
-            padding: 3px 8px;
-            border-radius: 999px;
-            border: 1px solid #e6e6e6;
-            font-weight: 700;
-        }}
-        .badge.a {{ background: #e8f0fe; border-color: #d2e3fc; color: #1a73e8; }}
-        .badge.b {{ background: #e6f4ea; border-color: #ceead6; color: #188038; }}
+  .panel {{
+    border: 1px solid #ddd;
+    border-radius: 14px;
+    overflow: hidden;
+    background: #fff;
+  }}
+  .panelHeader {{
+    padding: 10px 12px;
+    font-weight: 700;
+    border-bottom: 1px solid #eee;
+    background: #fafafa;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+  }}
+  .badge {{
+    font-size: 12px;
+    padding: 3px 8px;
+    border-radius: 999px;
+    border: 1px solid #e6e6e6;
+    font-weight: 700;
+  }}
+  .badge.a {{ background: #e8f0fe; border-color: #d2e3fc; color: #1a73e8; }}
+  .badge.b {{ background: #e6f4ea; border-color: #ceead6; color: #188038; }}
 
-        .log {{
-            padding: 12px;
-            height: 460px;
-            overflow: auto;
-            background: #f6f7f9;
-        }}
+  .log {{
+    padding: 12px;
+    height: 460px;
+    overflow: auto;
+    background: #f6f7f9;
+  }}
 
-        .msg {{
-            display: flex;
-            margin: 10px 0;
-        }}
-        .msg.you {{ justify-content: flex-end; }}
-        .msg.ai  {{ justify-content: flex-start; }}
+  .msg {{
+    display: flex;
+    margin: 10px 0;
+  }}
+  .msg.you {{ justify-content: flex-end; }}
+  .msg.ai  {{ justify-content: flex-start; }}
 
-        .bubble {{
-            max-width: 78%;
-            padding: 10px 12px;
-            border-radius: 14px;
-            line-height: 1.35;
-            border: 1px solid #e6e6e6;
-            background: #fff;
-            white-space: pre-wrap;
-            word-break: break-word;
-        }}
-        .msg.you .bubble {{
-            background: #e8f0fe;
-            border-color: #d2e3fc;
-        }}
-        .msg.ai .bubble {{
-            background: #ffffff;
-            border-color: #e6e6e6;
-        }}
+  .bubble {{
+    max-width: 78%;
+    padding: 10px 12px;
+    border-radius: 14px;
+    line-height: 1.35;
+    border: 1px solid #e6e6e6;
+    background: #fff;
+    white-space: pre-wrap;
+    word-break: break-word;
+  }}
+  .msg.you .bubble {{
+    background: #e8f0fe;
+    border-color: #d2e3fc;
+  }}
 
-        .label {{
-            font-weight: 700;
-            margin-bottom: 6px;
-            font-size: 13px;
-            opacity: 0.9;
-        }}
-        .msg.you .label {{ color:#1a73e8; }}
-        .msg.ai .label  {{ color:#188038; }}
+  .label {{
+    font-weight: 700;
+    margin-bottom: 6px;
+    font-size: 13px;
+    opacity: 0.9;
+  }}
+  .msg.you .label {{ color:#1a73e8; }}
+  .msg.ai .label  {{ color:#188038; }}
 
-        .links {{
-            margin-top: 8px;
-            font-size: 13px;
-        }}
-        .links a {{
-            display: inline-block;
-            margin-right: 10px;
-            text-decoration: underline;
-        }}
+  .links {{
+    margin-top: 8px;
+    font-size: 13px;
+  }}
+  .links a {{
+    display: inline-block;
+    margin-right: 10px;
+    text-decoration: underline;
+  }}
 
-        .row {{ display:flex; gap:8px; margin-top: 12px; }}
-        input {{ flex:1; padding:10px; border-radius:10px; border:1px solid #ccc; }}
-        button {{ padding:10px 14px; border-radius:10px; border:1px solid #ccc; cursor:pointer; }}
-        button:disabled {{ opacity:0.6; cursor:not-allowed; }}
+  .row {{ display:flex; gap:8px; margin-top: 12px; }}
+  input {{ flex:1; padding:10px; border-radius:10px; border:1px solid #ccc; }}
+  button {{ padding:10px 14px; border-radius:10px; border:1px solid #ccc; cursor:pointer; }}
+  button:disabled {{ opacity:0.6; cursor:not-allowed; }}
 
-        img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
-    </style>
-    </head>
-    <body>
-    <h2>Research Chat</h2>
-    <div class="meta">rid: <code>{rid}</code> | page cond: <code>{cond}</code></div>
+  img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
 
-    <div id="grid" class="grid"></div>
+  /* ------- Sponsored banner styles ------- */
+  .panel.banner {{
+    border: 1px solid #111827;
+    background: #0b1220;
+  }}
+  .panel.banner .panelHeader {{
+    background: #0b1220;
+    border-bottom: 1px solid rgba(255,255,255,0.08);
+    color: #e5e7eb;
+  }}
+  .panel.banner .badge {{
+    border-color: rgba(255,255,255,0.14);
+    color: #e5e7eb;
+    background: rgba(255,255,255,0.06);
+  }}
+  .log.bannerLog {{
+    background: #0b1220;
+    color: #e5e7eb;
+  }}
+  .sponsorHint {{
+    font-size: 12px;
+    color: rgba(229,231,235,0.75);
+    margin-top: 2px;
+    font-weight: 500;
+    line-height: 1.35;
+  }}
+  .sCard {{
+    border: 1px solid rgba(255,255,255,0.10);
+    background: rgba(255,255,255,0.06);
+    border-radius: 12px;
+    padding: 10px 10px;
+    margin: 10px 0;
+  }}
+  .sTitle {{
+    font-weight: 800;
+    font-size: 13px;
+    margin-bottom: 6px;
+  }}
+  .sWhy {{
+    font-size: 12.5px;
+    color: rgba(229,231,235,0.85);
+    margin-bottom: 8px;
+    line-height: 1.35;
+  }}
+  .sCtaRow {{
+    display: flex;
+    gap: 8px;
+    align-items: center;
+    flex-wrap: wrap;
+  }}
+  .sBtn {{
+    display: inline-block;
+    font-size: 12px;
+    font-weight: 800;
+    padding: 6px 10px;
+    border-radius: 999px;
+    border: 1px solid rgba(255,255,255,0.16);
+    background: rgba(255,255,255,0.10);
+    color: #e5e7eb;
+    text-decoration: none;
+  }}
+  .sLink {{
+    font-size: 12px;
+    color: rgba(147,197,253,0.95);
+    text-decoration: underline;
+  }}
+</style>
+</head>
+<body>
+<h2>Research Chat</h2>
+<div class="meta">rid: <code>{rid}</code> | page cond: <code>{cond}</code></div>
 
-    <div class="row">
-        <input id="msg" placeholder="Type your message..." />
-        <button id="send">Send</button>
-    </div>
+<div id="grid" class="grid"></div>
 
-    <script>
-    const rid = {rid!r};
-    const pageCond = {cond!r};   // UI assignment only: "A" or "B"
-    const borrowedAdsHistory = {borrowed_ads_history!r}; // pass-through from URL
+<div class="row">
+  <input id="msg" placeholder="Type your message..." />
+  <button id="send">Send</button>
+</div>
 
-    const grid = document.getElementById("grid");
-    const msgBox = document.getElementById("msg");
-    const sendBtn = document.getElementById("send");
+<script>
+  const rid = {rid!r};
+  const pageCond = {cond!r};   // "A" or "B"
+  const borrowedAdsHistory = {borrowed_ads_history!r};
 
-    function escapeHtml(s) {{
-        return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  const grid = document.getElementById("grid");
+  const msgBox = document.getElementById("msg");
+  const sendBtn = document.getElementById("send");
+
+  function escapeHtml(s) {{
+    return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+  }}
+
+  function createPanel(title, badgeText, badgeClass) {{
+    const panel = document.createElement("div");
+    panel.className = "panel";
+
+    const header = document.createElement("div");
+    header.className = "panelHeader";
+    header.innerHTML = `
+      <div>${{escapeHtml(title)}}</div>
+      <div class="badge ${{badgeClass}}">${{escapeHtml(badgeText)}}</div>
+    `;
+
+    const log = document.createElement("div");
+    log.className = "log";
+
+    panel.appendChild(header);
+    panel.appendChild(log);
+    return {{ panel, log }};
+  }}
+
+  function addBlock(logEl, cls, label, text, imageUrls=[]) {{
+    const row = document.createElement("div");
+    row.className = "msg " + cls;
+
+    const bubble = document.createElement("div");
+    bubble.className = "bubble";
+
+    let html = `<div class="label">${{escapeHtml(label)}}</div>`;
+    html += `<div>${{escapeHtml(text)}}</div>`;
+
+    if (imageUrls && imageUrls.length) {{
+      html += '<div class="links"><b>Images:</b> ';
+      for (const u of imageUrls) {{
+        html += `<a href="${{u}}" target="_blank" rel="noopener noreferrer">open</a>`;
+      }}
+      html += "</div>";
+      html += `<img class="chatimg" src="${{imageUrls[0]}}" alt="result image"/>`;
     }}
 
-    function createPanel(title, badgeText, badgeClass) {{
-        const panel = document.createElement("div");
-        panel.className = "panel";
+    bubble.innerHTML = html;
+    row.appendChild(bubble);
+    logEl.appendChild(row);
+    logEl.scrollTop = logEl.scrollHeight;
+  }}
 
-        const header = document.createElement("div");
-        header.className = "panelHeader";
-        header.innerHTML = `
-            <div>${{escapeHtml(title)}}</div>
-            <div class="badge ${{badgeClass}}">${{escapeHtml(badgeText)}}</div>
-        `;
+  function clearSponsorIfTooLong(logEl, keep=8) {{
+    const cards = Array.from(logEl.querySelectorAll(".sCard"));
+    if (cards.length > keep) {{
+      for (let i = 0; i < cards.length - keep; i++) cards[i].remove();
+    }}
+  }}
 
-        const log = document.createElement("div");
-        log.className = "log";
+  function addSponsorCards(logEl, items) {{
+    if (!items || !items.length) return;
 
-        panel.appendChild(header);
-        panel.appendChild(log);
-        return {{ panel, log }};
+    for (const it of items) {{
+      const card = document.createElement("div");
+      card.className = "sCard";
+
+      const urls = (it.urls || []).slice(0,2);
+      const linksHtml = urls.map(u => `<a class="sLink" href="${{u}}" target="_blank" rel="noopener noreferrer">link</a>`).join(" ");
+
+      card.innerHTML = `
+        <div class="sTitle">${{escapeHtml(it.title || "")}}</div>
+        <div class="sWhy">${{escapeHtml(it.why || "")}}</div>
+        <div class="sCtaRow">
+          <span class="sBtn">${{escapeHtml(it.cta || "Learn more")}}</span>
+          ${{linksHtml}}
+        </div>
+      `;
+
+      logEl.appendChild(card);
     }}
 
-    function addBlock(logEl, cls, label, text, imageUrls=[]) {{
-        const row = document.createElement("div");
-        row.className = "msg " + cls;
+    clearSponsorIfTooLong(logEl, 8);
+    logEl.scrollTop = logEl.scrollHeight;
+  }}
 
-        const bubble = document.createElement("div");
-        bubble.className = "bubble";
+  let panelA = null;
+  let panelB = null;
 
-        let html = `<div class="label">${{escapeHtml(label)}}</div>`;
-        html += `<div>${{escapeHtml(text)}}</div>`;
+  function setupUI() {{
+    grid.innerHTML = "";
 
-        if (imageUrls && imageUrls.length) {{
-            html += '<div class="links"><b>Images:</b> ';
-            for (const u of imageUrls) {{
-                html += `<a href="${{u}}" target="_blank" rel="noopener noreferrer">open</a>`;
-            }}
-            html += "</div>";
-            html += `<img class="chatimg" src="${{imageUrls[0]}}" alt="result image"/>`;
-        }}
+    if (pageCond === "B") {{
+      grid.className = "grid two";
 
-        bubble.innerHTML = html;
-        row.appendChild(bubble);
-        logEl.appendChild(row);
-        logEl.scrollTop = logEl.scrollHeight;
+      panelA = createPanel("Organic Assistant", "A", "a");
+      panelB = createPanel("Sponsored", "Ad", "b");
+
+      panelB.panel.classList.add("banner");
+      panelB.log.classList.add("bannerLog");
+
+      grid.appendChild(panelA.panel);
+      grid.appendChild(panelB.panel);
+
+      addBlock(panelA.log, "ai", "AI", "Hi! You can start chatting now.");
+
+      panelB.log.innerHTML = `
+        <div class="sponsorHint">
+          Recommendations may appear when relevant.
+        </div>
+      `;
+    }} else {{
+      grid.className = "grid";
+      panelA = createPanel("Assistant", "A", "a");
+      panelB = null;
+      grid.appendChild(panelA.panel);
+
+      addBlock(panelA.log, "ai", "AI", "Hi! You can start chatting now.");
     }}
+  }}
 
-    let panelA = null;
-    let panelB = null;
-
-    function setupUI() {{
-        grid.innerHTML = "";
-
-        if (pageCond === "B") {{
-            grid.className = "grid two";
-            panelA = createPanel("Organic Assistant", "A", "a");
-            panelB = createPanel("Sponsored Assistant", "B", "b");
-            grid.appendChild(panelA.panel);
-            grid.appendChild(panelB.panel);
-
-            addBlock(panelA.log, "ai", "AI", "Hi! You can start chatting now.");
-            addBlock(panelB.log, "ai", "AI", "Hi! You can start chatting now.");
-        }} else {{
-            grid.className = "grid";
-            panelA = createPanel("Assistant", "A", "a");
-            panelB = null;
-            grid.appendChild(panelA.panel);
-
-            addBlock(panelA.log, "ai", "AI", "Hi! You can start chatting now.");
-        }}
-    }}
-
-    async function callChatAPI(panelToSend, userText) {{
-        const resp = await fetch("/api/chat", {{
-            method: "POST",
-            headers: {{ "Content-Type": "application/json" }},
-            body: JSON.stringify({{
-                rid,
-                cond: pageCond,              // ✅ UI assignment
-                panel: panelToSend,          // ✅ "A" or "B"
-                msg: userText,
-                borrowed_ads_history: borrowedAdsHistory
-            }})
-        }});
-        const data = await resp.json();
-        return {{ ok: resp.ok, data }};
-    }}
-
-    async function send() {{
-        const text = msgBox.value.trim();
-        if (!text) return;
-
-        msgBox.value = "";
-        sendBtn.disabled = true;
-
-        if (pageCond === "B") {{
-            addBlock(panelA.log, "you", "You", text);
-
-            try {{
-                const [ra, rb] = await Promise.all([
-                    callChatAPI("A", text),
-                    callChatAPI("B", text),
-                ]);
-
-                if (!ra.ok) addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
-                else addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
-
-                if (!rb.ok) addBlock(panelB.log, "ai", "AI (error)", rb.data.error || "Request failed");
-                else addBlock(panelB.log, "ai", "AI", rb.data.reply || "", rb.data.image_urls || []);
-            }} catch (e) {{
-                addBlock(panelA.log, "ai", "AI (error)", String(e));
-                addBlock(panelB.log, "ai", "AI (error)", String(e));
-            }} finally {{
-                sendBtn.disabled = false;
-                msgBox.focus();
-            }}
-        }} else {{
-            addBlock(panelA.log, "you", "You", text);
-
-            try {{
-                // ✅ single-panel always calls panel="A"
-                const r = await callChatAPI("A", text);
-                if (!r.ok) addBlock(panelA.log, "ai", "AI (error)", r.data.error || "Request failed");
-                else addBlock(panelA.log, "ai", "AI", r.data.reply || "", r.data.image_urls || []);
-            }} catch (e) {{
-                addBlock(panelA.log, "ai", "AI (error)", String(e));
-            }} finally {{
-                sendBtn.disabled = false;
-                msgBox.focus();
-            }}
-        }}
-    }}
-
-    sendBtn.onclick = send;
-    msgBox.addEventListener("keydown", (e) => {{
-        if (e.key === "Enter") send();
+  async function callChatAPI(userText) {{
+    const resp = await fetch("/api/chat", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{
+        rid,
+        cond: pageCond,
+        panel: "A",
+        msg: userText,
+        borrowed_ads_history: borrowedAdsHistory
+      }})
     }});
+    const data = await resp.json();
+    return {{ ok: resp.ok, data }};
+  }}
 
-    setupUI();
-    msgBox.focus();
-    </script>
-    </body>
-    </html>
+  async function callSponsorAPI(userText) {{
+    const resp = await fetch("/api/sponsor", {{
+      method: "POST",
+      headers: {{ "Content-Type": "application/json" }},
+      body: JSON.stringify({{
+        rid,
+        cond: pageCond,
+        msg: userText,
+        borrowed_ads_history: borrowedAdsHistory
+      }})
+    }});
+    const data = await resp.json();
+    return {{ ok: resp.ok, data }};
+  }}
+
+  async function send() {{
+    const text = msgBox.value.trim();
+    if (!text) return;
+
+    msgBox.value = "";
+    sendBtn.disabled = true;
+
+    addBlock(panelA.log, "you", "You", text);
+
+    try {{
+      if (pageCond === "B") {{
+        const [ra, rs] = await Promise.all([
+          callChatAPI(text),
+          callSponsorAPI(text),
+        ]);
+
+        if (!ra.ok) addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
+        else addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
+
+        if (rs.ok && rs.data && rs.data.show) {{
+          addSponsorCards(panelB.log, rs.data.items || []);
+        }}
+      }} else {{
+        const r = await callChatAPI(text);
+        if (!r.ok) addBlock(panelA.log, "ai", "AI (error)", r.data.error || "Request failed");
+        else addBlock(panelA.log, "ai", "AI", r.data.reply || "", r.data.image_urls || []);
+      }}
+    }} catch (e) {{
+      addBlock(panelA.log, "ai", "AI (error)", String(e));
+    }} finally {{
+      sendBtn.disabled = false;
+      msgBox.focus();
+    }}
+  }}
+
+  sendBtn.onclick = send;
+  msgBox.addEventListener("keydown", (e) => {{
+    if (e.key === "Enter") send();
+  }});
+
+  setupUI();
+  msgBox.focus();
+</script>
+</body>
+</html>
     """
 
-def extract_image_urls_from_response(resp_obj) -> list:
+
+# ----------------------------
+# Helpers
+# ----------------------------
+def extract_image_urls_from_response(resp_obj) -> tuple[list, dict]:
     """
     Best-effort extraction of image URLs from a Responses API object.
-
-    Different models/tools can return different shapes, so we scan:
-    - resp.output[*].content[*] items that look like image/url blocks
-    - any dict fields named 'url' that end in an image extension
     """
     urls = []
 
     def looks_like_image_url(u: str) -> bool:
         u = (u or "").lower()
-        return u.startswith("http") and any(u.split("?")[0].endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"])
+        return u.startswith("http") and any(
+            u.split("?")[0].endswith(ext) for ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]
+        )
 
     def walk(x):
         if isinstance(x, dict):
-            # direct url field
             if "url" in x and isinstance(x["url"], str) and looks_like_image_url(x["url"]):
                 urls.append(x["url"])
             for v in x.values():
@@ -426,16 +556,13 @@ def extract_image_urls_from_response(resp_obj) -> list:
             for v in x:
                 walk(v)
 
-    # Convert to plain dict for storage & parsing
     try:
         resp_dict = resp_obj.model_dump()
     except Exception:
-        # fallback; should still be JSON-serializable
         resp_dict = json.loads(json.dumps(resp_obj, default=str))
 
     walk(resp_dict)
 
-    # de-dup while preserving order
     seen = set()
     out = []
     for u in urls:
@@ -443,6 +570,7 @@ def extract_image_urls_from_response(resp_obj) -> list:
             seen.add(u)
             out.append(u)
     return out, resp_dict
+
 
 def build_instructions(panel: str) -> tuple[str, str]:
     panel = (panel or "A").strip().upper()
@@ -452,12 +580,14 @@ def build_instructions(panel: str) -> tuple[str, str]:
             "You are an assistant providing an organic, neutral answer. "
             "Do NOT mention sponsorship."
         )
-    else:  # panel == "B"
+    else:
+        # This chat-panel B mode is no longer used by the UI (we use /api/sponsor),
+        # but keep it for backwards compatibility.
         system = (
-        "You are an assistant providing a sponsored-style answer. "
-        "You MUST append exactly ' [sponsor]' at the very end of your reply. "
-        "Nothing is allowed after it (no punctuation, no extra whitespace)."
-    )
+            "You are an assistant providing a sponsored-style answer. "
+            "You MUST append exactly ' [sponsor]' at the very end of your reply. "
+            "Nothing is allowed after it (no punctuation, no extra whitespace)."
+        )
 
     instruction = (
         "Answer in 2-4 sentences.\n"
@@ -468,15 +598,41 @@ def build_instructions(panel: str) -> tuple[str, str]:
     )
     return system, instruction
 
+
+def build_sponsor_system() -> str:
+    return (
+        "You are a sponsored recommendation banner for a research chat UI.\n"
+        "Your job: decide whether it is appropriate to show 1-3 sponsored recommendations "
+        "based on the user's latest message.\n\n"
+        "Rules:\n"
+        "- If the user's message does NOT imply shopping intent, product research, services, tools, "
+        "or anything that reasonably maps to a recommendation, respond with EXACT JSON:\n"
+        '  {"show": false, "items": []}\n'
+        "- If it IS appropriate, respond with EXACT JSON:\n"
+        '  {"show": true, "items": [ ... ] }\n'
+        "- Each item must be SHORT and banner-like.\n"
+        "- Do NOT write prose outside JSON. Do NOT wrap in markdown.\n"
+        "- Max 3 items.\n"
+        "- Prefer including URLs only when you are confident they are real; otherwise omit urls.\n\n"
+        "JSON schema:\n"
+        "{\n"
+        '  "show": boolean,\n'
+        '  "items": [\n'
+        "    {\n"
+        '      "title": string,\n'
+        '      "why": string,\n'
+        '      "cta": string,\n'
+        '      "urls": [string]\n'
+        "    }\n"
+        "  ]\n"
+        "}\n"
+    )
+
+
 def fetch_history(rid: str, panels: list[str], limit: int = 30):
     """
-    Fetch history for a given rid, filtered by which PANEL(s) to include:
-      panels=["A"]      -> organic panel only (assistant A + user turns)
-      panels=["A","B"]  -> both panels (assistant A + assistant B + user turns)
-
-    Important behavior:
-    - De-dupes consecutive identical user turns (in case older data has duplicates).
-    - Labels assistant messages when both panels are included so the model can distinguish sources.
+    Fetch history for a given rid, filtered by which PANEL(s) to include.
+    - If panels includes both A and B, assistant messages are tagged [Organic]/[Sponsored] so the model can distinguish.
     """
     if not db_enabled():
         return []
@@ -490,7 +646,6 @@ def fetch_history(rid: str, panels: list[str], limit: int = 30):
 
     include_both = ("A" in panels and "B" in panels)
 
-    # Fetch more than needed, because we may drop duplicates during cleaning
     fetch_n = max(limit * 4, 80)
 
     try:
@@ -522,13 +677,11 @@ def fetch_history(rid: str, panels: list[str], limit: int = 30):
             panel = (panel or "A").strip().upper()
 
             if role == "user":
-                # De-dupe consecutive identical user turns
                 if prev_user_content == content:
                     continue
                 prev_user_content = content
                 out.append({"role": "user", "content": content})
             else:
-                # assistant
                 prev_user_content = None
                 if include_both:
                     tag = "[Organic]" if panel == "A" else "[Sponsored]"
@@ -544,6 +697,9 @@ def fetch_history(rid: str, panels: list[str], limit: int = 30):
         return []
 
 
+# ----------------------------
+# API: Organic assistant chat
+# ----------------------------
 @app.post("/api/chat")
 def api_chat():
     if client is None:
@@ -552,8 +708,8 @@ def api_chat():
     data = request.get_json(silent=True) or {}
 
     rid = (data.get("rid") or "missing").strip()
-    cond = (data.get("cond") or "A").strip().upper()      # participant assignment: "A" or "B"
-    panel = (data.get("panel") or "A").strip().upper()    # assistant being called: "A" or "B"
+    cond = (data.get("cond") or "A").strip().upper()
+    panel = (data.get("panel") or "A").strip().upper()  # UI should always send "A" now
     user_msg = (data.get("msg") or "").strip()
 
     borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
@@ -562,81 +718,70 @@ def api_chat():
     if not user_msg:
         return jsonify({"error": "Missing msg"}), 400
 
-    # Guardrails
     if cond not in ("A", "B"):
         return jsonify({"error": f"Invalid cond: {cond}"}), 400
     if panel not in ("A", "B"):
         return jsonify({"error": f"Invalid panel: {panel}"}), 400
-    if cond == "A" and panel == "B":
-        return jsonify({"error": "Invalid: cond=A (single-panel) should not call panel B"}), 400
+    if panel != "A":
+        # This UI version no longer uses panel B chat. Keep it strict to avoid confusion.
+        return jsonify({"error": "This UI only supports panel='A' for /api/chat. Use /api/sponsor for ads."}), 400
 
-    # ----------------------------
-    # Logging rule (IMPORTANT)
-    # ----------------------------
-    # Log the user turn ONLY ONCE to avoid duplicate user messages in memory.
-    # We log user turns under panel="A" always.
-    # Panel B will still see the user turns because it fetches panels ["A","B"].
+    # Log the user turn ONLY ONCE
     try:
-        if panel == "A":
-            log_turn(
-                rid=rid,
-                cond=cond,
-                panel="A",
-                role="user",
-                content=user_msg,
-                borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
-            )
+        log_turn(
+            rid=rid,
+            cond=cond,
+            panel="A",
+            role="user",
+            content=user_msg,
+            borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+        )
     except Exception:
-        # If your log_turn signature differs, fail quietly (but you should keep it consistent)
         pass
 
-    # Instructions depend on which assistant we are calling
-    system, instruction = build_instructions(panel)
+    system, instruction = build_instructions("A")
 
-    # ----------------------------
-    # History visibility rules
-    # ----------------------------
-    # Panel B ALWAYS sees both assistant histories.
-    # Panel A sees both only if (cond=B and borrowed_ads_history=True). Otherwise A-only + "can't reference B".
-    if panel == "B":
+    # Panel A history visibility:
+    # - default: only A
+    # - if you set borrowed_ads_history and want A to see B too, flip allowed_panels to ["A","B"]
+    if cond == "B" and borrowed_ads_history:
         allowed_panels = ["A", "B"]
-        saw_b_history = True
-        system_final = system
+        system_final = system + "\n\n" + instruction
+        system_final += (
+            "\n\nNOTE: You may see sponsored history tagged [Sponsored]. "
+            "Do not mention sponsorship unless the user explicitly asks."
+        )
     else:
-        # panel == "A"
-        if cond == "B" and borrowed_ads_history:
-            allowed_panels = ["A", "B"]
-            saw_b_history = True
-            system_final = system
-        else:
-            allowed_panels = ["A"]
-            saw_b_history = False
-            system_final = (
-                system
-                + "\n\nIMPORTANT: You do NOT have access to any sponsored-panel (B) content. "
-                  "Do NOT mention, imply, summarize, or refer to anything from panel B. "
-                  "If asked what the sponsored assistant said, say you cannot access it."
-            )
-
-    # Put task instruction in system so it always applies even with history
-    system_final = system_final + "\n\n" + instruction
+        allowed_panels = ["A"]
+        system_final = system + "\n\n" + instruction
+        system_final += (
+            "\n\nIMPORTANT: You do NOT have access to any sponsored banner content. "
+            "Do NOT mention, imply, summarize, or refer to anything from the sponsored side."
+        )
 
     tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
 
     try:
         history = fetch_history(rid, panels=allowed_panels, limit=30)
 
-        print("DEBUG rid=", rid, "cond=", cond, "panel=", panel,
-              "borrowed=", borrowed_ads_history,
-              "allowed_panels=", allowed_panels,
-              "history_len=", len(history))
+        print(
+            "DEBUG /api/chat rid=",
+            rid,
+            "cond=",
+            cond,
+            "panel=",
+            panel,
+            "borrowed=",
+            borrowed_ads_history,
+            "allowed_panels=",
+            allowed_panels,
+            "history_len=",
+            len(history),
+        )
 
-        # If DB is off or history is empty, we must include the user message explicitly
         messages = [{"role": "system", "content": system_final}]
         if history:
             messages += history
-            # Make sure the current user turn is present (it should be, if panel A logged it).
-            # If not present (e.g., panel=B call first, or DB disabled), append it.
             if history[-1]["role"] != "user" or history[-1]["content"].strip() != user_msg:
                 messages.append({"role": "user", "content": user_msg})
         else:
@@ -651,11 +796,10 @@ def api_chat():
         reply_text = resp.output_text or ""
         image_urls, resp_dict = extract_image_urls_from_response(resp)
 
-        # Log assistant response under the panel that produced it
         log_turn(
             rid=rid,
             cond=cond,
-            panel=panel,
+            panel="A",
             role="assistant",
             content=reply_text,
             image_urls=image_urls,
@@ -663,17 +807,18 @@ def api_chat():
             borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
         )
 
-        return jsonify({
-            "rid": rid,
-            "cond": cond,  # participant assignment
-            "panel": panel,
-            "borrowed_ads_history": borrowed_ads_history if cond == "B" else None,
-            "saw_b_history": saw_b_history,
-            "model": OPENAI_MODEL,
-            "use_web_search": USE_WEB_SEARCH,
-            "reply": reply_text,
-            "image_urls": image_urls,
-        })
+        return jsonify(
+            {
+                "rid": rid,
+                "cond": cond,
+                "panel": "A",
+                "borrowed_ads_history": borrowed_ads_history if cond == "B" else None,
+                "model": OPENAI_MODEL,
+                "use_web_search": USE_WEB_SEARCH,
+                "reply": reply_text,
+                "image_urls": image_urls,
+            }
+        )
 
     except Exception as e:
         print("OpenAI call failed:", repr(e))
@@ -681,6 +826,104 @@ def api_chat():
         return jsonify({"error": "OpenAI call failed", "details": str(e)}), 500
 
 
+# ----------------------------
+# API: Sponsored banner (selective, JSON-only)
+# ----------------------------
+@app.post("/api/sponsor")
+def api_sponsor():
+    if client is None:
+        return jsonify({"error": "OPENAI_API_KEY not set on server"}), 500
+
+    data = request.get_json(silent=True) or {}
+    rid = (data.get("rid") or "missing").strip()
+    cond = (data.get("cond") or "A").strip().upper()
+    user_msg = (data.get("msg") or "").strip()
+
+    borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
+    borrowed_ads_history = borrowed_raw in ("1", "true", "yes", "y", "t")
+
+    if cond not in ("A", "B"):
+        return jsonify({"error": f"Invalid cond: {cond}"}), 400
+    if not user_msg:
+        return jsonify({"error": "Missing msg"}), 400
+
+    # Banner should be lightweight; only look at organic history by default.
+    allowed_panels = ["A"]
+    history = fetch_history(rid, panels=allowed_panels, limit=20)
+
+    system_final = build_sponsor_system()
+
+    messages = [{"role": "system", "content": system_final}]
+    if history:
+        messages += history
+        if history[-1]["role"] != "user" or history[-1]["content"].strip() != user_msg:
+            messages.append({"role": "user", "content": user_msg})
+    else:
+        messages.append({"role": "user", "content": user_msg})
+
+    try:
+        resp = client.responses.create(
+            model=OPENAI_MODEL,
+            input=messages,
+            tools=None,  # keep banner cheap + deterministic
+        )
+
+        raw = (resp.output_text or "").strip()
+
+        # Parse JSON safely
+        try:
+            payload = json.loads(raw)
+        except Exception:
+            payload = {"show": False, "items": []}
+
+        show = bool(payload.get("show"))
+        items = payload.get("items") or []
+        if not isinstance(items, list):
+            items = []
+
+        clean_items = []
+        for it in items[:3]:
+            if not isinstance(it, dict):
+                continue
+            title = str(it.get("title") or "").strip()
+            why = str(it.get("why") or "").strip()
+            cta = str(it.get("cta") or "").strip()
+            urls = it.get("urls") or []
+            if not isinstance(urls, list):
+                urls = []
+            urls = [str(u).strip() for u in urls[:2] if isinstance(u, str) and u.strip()]
+
+            if title and why and cta:
+                clean_items.append({"title": title, "why": why, "cta": cta, "urls": urls})
+
+        out = {"show": bool(show and clean_items), "items": clean_items}
+
+        # Optional: log sponsor outputs as panel B assistant (stored as JSON string)
+        try:
+            log_turn(
+                rid=rid,
+                cond=cond,
+                panel="B",
+                role="assistant",
+                content=json.dumps(out, ensure_ascii=False),
+                raw_response={"sponsor_raw_text": raw},
+                borrowed_ads_history=borrowed_ads_history if cond == "B" else None,
+            )
+        except Exception:
+            pass
+
+        return jsonify(out)
+
+    except Exception as e:
+        print("Sponsor call failed:", repr(e))
+        traceback.print_exc()
+        # Banner failure should not break the chat experience
+        return jsonify({"show": False, "items": [], "error": "Sponsor call failed", "details": str(e)}), 200
+
+
+# ----------------------------
+# Example page (unchanged)
+# ----------------------------
 @app.get("/example")
 def example():
     return """
@@ -715,6 +958,7 @@ def example():
       </body>
     </html>
     """
+
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
