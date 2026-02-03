@@ -427,56 +427,89 @@ def chat_page():
   }}
 
   function addSponsorSection(logEl, userText, items) {{
-    if (!items || !items.length) return;
+  if (!items || !items.length) return;
 
-    const section = document.createElement("div");
-    section.className = "sSection";
+  const section = document.createElement("div");
+  section.className = "sSection";
 
-    const header = document.createElement("div");
-    header.className = "sSectionHeader";
+  const header = document.createElement("div");
+  header.className = "sSectionHeader";
 
-    const q = (userText || "").trim();
-    const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
+  const q = (userText || "").trim();
+  const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
 
-    header.innerHTML = `
-        <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
-        <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
+  header.innerHTML = `
+    <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
+    <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
+  `;
+
+  section.appendChild(header);
+
+  function domainFromUrl(u) {{
+    try {{
+      return new URL(u).hostname.replace(/^www\./, "");
+    }} catch (e) {{
+      return "";
+    }}
+  }}
+
+  for (const it of items) {{
+    const card = document.createElement("div");
+    card.className = "sCard";
+
+    // Use ONLY the first URL (button points here)
+    const primaryUrl =
+      (it && Array.isArray(it.urls) && it.urls.length && String(it.urls[0]).trim())
+        ? String(it.urls[0]).trim()
+        : "";
+
+    const ctaText = escapeHtml(it && it.cta ? it.cta : "Learn more");
+
+    const ctaHtml = primaryUrl
+      ? `<a class="sBtn" href="${{primaryUrl}}" target="_blank" rel="noopener noreferrer">${{ctaText}}</a>`
+      : `<span class="sBtn" aria-disabled="true" style="opacity:0.7; cursor:default;">${{ctaText}}</span>`;
+
+    // Thumbnail from domain (favicon service)
+    const dom = primaryUrl ? domainFromUrl(primaryUrl) : "";
+    const thumbUrl = dom
+      ? `https://www.google.com/s2/favicons?domain=${{encodeURIComponent(dom)}}&sz=64`
+      : "";
+
+    // Build card layout with right-side thumbnail
+    card.innerHTML = `
+      <div class="sCardRow">
+        <div class="sCardMain">
+          <div class="sTitle">${{escapeHtml(it && it.title ? it.title : "")}}</div>
+          <div class="sWhy">${{escapeHtml(it && it.why ? it.why : "")}}</div>
+          <div class="sCtaRow">
+            ${{ctaHtml}}
+          </div>
+        </div>
+
+        ${{thumbUrl ? `
+          <div class="sThumbWrap">
+            <img class="sThumb" src="${{thumbUrl}}" alt="" />
+          </div>
+        ` : ``}}
+      </div>
     `;
 
-    section.appendChild(header);
-
-    for (const it of items) {{
-        const card = document.createElement("div");
-        card.className = "sCard";
-
-        // Use ONLY the first URL (no separate "link" anchors)
-        const primaryUrl =
-        (it && Array.isArray(it.urls) && it.urls.length && String(it.urls[0]).trim())
-            ? String(it.urls[0]).trim()
-            : "";
-
-        const ctaText = escapeHtml(it && it.cta ? it.cta : "Learn more");
-
-        // CTA pill becomes the clickable link when URL exists
-        const ctaHtml = primaryUrl
-        ? `<a class="sBtn" href="${{primaryUrl}}" target="_blank" rel="noopener noreferrer">${{ctaText}}</a>`
-        : `<span class="sBtn" aria-disabled="true" style="opacity:0.7; cursor:default;">${{ctaText}}</span>`;
-
-        card.innerHTML = `
-        <div class="sTitle">${{escapeHtml(it && it.title ? it.title : "")}}</div>
-        <div class="sWhy">${{escapeHtml(it && it.why ? it.why : "")}}</div>
-        <div class="sCtaRow">
-            ${{ctaHtml}}
-        </div>
-        `;
-
-        section.appendChild(card);
+    // If favicon fails to load, hide the thumb block (clean fallback)
+    const img = card.querySelector(".sThumb");
+    if (img) {{
+      img.onerror = () => {{
+        const wrap = card.querySelector(".sThumbWrap");
+        if (wrap) wrap.remove();
+      }};
     }}
 
-    logEl.appendChild(section);
-    trimSponsorSections(logEl, 6);
-    logEl.scrollTop = logEl.scrollHeight;
-    }}
+    section.appendChild(card);
+  }}
+
+  logEl.appendChild(section);
+  trimSponsorSections(logEl, 6);
+  logEl.scrollTop = logEl.scrollHeight;
+}}
 
 
   let panelA = null;
