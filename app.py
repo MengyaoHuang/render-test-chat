@@ -12,7 +12,7 @@ app = Flask(__name__)
 # ----------------------------
 OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
 OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "gpt-4.1-mini")
-USE_WEB_SEARCH = os.environ.get("USE_WEB_SEARCH", "0").strip().lower() in ("1", "true", "yes", "y", "t")
+USE_WEB_SEARCH = os.environ.get("USE_WEB_SEARCH", "0").strip() in ("1", "true", "True", "yes", "YES")
 
 client = OpenAI(api_key=OPENAI_API_KEY) if OPENAI_API_KEY else None
 
@@ -29,6 +29,7 @@ def db_enabled() -> bool:
 def get_db():
     if not DATABASE_URL:
         raise RuntimeError("DATABASE_URL not set")
+    # Render typically supports sslmode=require; prefer keeps it flexible.
     return psycopg2.connect(DATABASE_URL, sslmode="prefer")
 
 
@@ -39,6 +40,7 @@ def init_db():
 
     with get_db() as conn:
         with conn.cursor() as cur:
+            # Create table if missing (latest schema)
             cur.execute(
                 """
             CREATE TABLE IF NOT EXISTS public.chat_logs (
@@ -119,9 +121,6 @@ except Exception as e:
     traceback.print_exc()
 
 
-# ----------------------------
-# Basic endpoints
-# ----------------------------
 @app.get("/")
 def home():
     return "Render is live ✅"
@@ -144,6 +143,7 @@ def health():
 def chat_page():
     rid = request.args.get("rid", "missing")
     cond = request.args.get("cond", "A")  # "A" single panel, "B" two-panel (organic + sponsor banner)
+
     borrowed_ads_history = request.args.get("borrowed", "")  # pass-through (optional)
 
     return f"""
@@ -154,18 +154,7 @@ def chat_page():
 <title>Research Chat</title>
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <style>
-  /* Fill the window (remove big empty bottom area) */
-  html, body {{ height: 100%; }}
-  body {{
-    font-family: Arial, sans-serif;
-    max-width: 1300px;
-    margin: 16px auto;
-    padding: 0 12px;
-    height: 100vh;
-    display: flex;
-    flex-direction: column;
-  }}
-
+  body {{ font-family: Arial, sans-serif; max-width: 1300px; margin: 24px auto; padding: 0 12px; }}
   .meta {{ color:#666; font-size: 14px; margin-bottom: 12px; }}
 
   .grid {{
@@ -173,10 +162,7 @@ def chat_page():
     grid-template-columns: 1fr;
     gap: 12px;
     align-items: start;
-    flex: 1;           /* take remaining vertical space */
-    min-height: 0;     /* allow children to scroll */
   }}
-  /* Adjust proportion here */
   .grid.two {{ grid-template-columns: 3fr 2fr; }}     /* ~60% / 40% */
 
   .panel {{
@@ -184,9 +170,6 @@ def chat_page():
     border-radius: 14px;
     overflow: hidden;
     background: #fff;
-    display: flex;
-    flex-direction: column;
-    min-height: 0;     /* important for inner scroll */
   }}
   .panelHeader {{
     padding: 10px 12px;
@@ -210,10 +193,9 @@ def chat_page():
 
   .log {{
     padding: 12px;
+    height: 560px;
     overflow: auto;
     background: #f6f7f9;
-    flex: 1;           /* fill panel */
-    min-height: 0;     /* allow scroll */
   }}
 
   .msg {{
@@ -257,11 +239,7 @@ def chat_page():
     text-decoration: underline;
   }}
 
-  .row {{
-    display:flex;
-    gap:8px;
-    margin-top: 12px;
-  }}
+  .row {{ display:flex; gap:8px; margin-top: 12px; }}
   input {{ flex:1; padding:10px; border-radius:10px; border:1px solid #ccc; }}
   button {{ padding:10px 14px; border-radius:10px; border:1px solid #ccc; cursor:pointer; }}
   button:disabled {{ opacity:0.6; cursor:not-allowed; }}
@@ -269,108 +247,77 @@ def chat_page():
   img.chatimg {{ max-width: 100%; border-radius: 10px; margin-top: 8px; border: 1px solid #eee; }}
 
   /* ------- Sponsored banner styles (slightly lighter dark) ------- */
-  .panel.banner {{
+    .panel.banner {{
     border: 1px solid rgba(255,255,255,0.08);
-    background: #111827;
-  }}
-  .panel.banner .panelHeader {{
+    background: #111827; /* lighter than #0b1220 */
+    }}
+    .panel.banner .panelHeader {{
     background: #111827;
     border-bottom: 1px solid rgba(255,255,255,0.10);
     color: #f3f4f6;
-  }}
-  .panel.banner .badge {{
+    }}
+    .panel.banner .badge {{
     border-color: rgba(255,255,255,0.16);
     color: #f3f4f6;
     background: rgba(255,255,255,0.08);
-  }}
-  .log.bannerLog {{
+    }}
+    .log.bannerLog {{
     background: #111827;
     color: #f3f4f6;
-  }}
-
-  .sponsorHint {{
+    }}
+    .sponsorHint {{
     font-size: 12px;
     color: rgba(243,244,246,0.75);
     margin-top: 2px;
     font-weight: 500;
     line-height: 1.35;
-  }}
-
-  /* Grouped "per-question" sponsor sections (like your reference) */
-  .sGroup {{
-    margin: 10px 0 14px 0;
-    padding-bottom: 12px;
-    border-bottom: 1px solid rgba(255,255,255,0.10);
-  }}
-  .sGroupHeader {{
-    display: flex;
-    align-items: center;
-    justify-content: space-between;
-    gap: 10px;
-    margin-bottom: 8px;
-  }}
-  .sGroupQ {{
-    font-size: 12px;
-    font-weight: 800;
-    color: rgba(243,244,246,0.92);
-  }}
-  .sGroupQ span {{
-    font-weight: 700;
-    color: rgba(243,244,246,0.70);
-  }}
-  .sGroupTime {{
-    font-size: 11px;
-    color: rgba(243,244,246,0.55);
-    white-space: nowrap;
-  }}
-
-  .sCard {{
+    }}
+    .sCard {{
     border: 1px solid rgba(255,255,255,0.12);
-    background: rgba(255,255,255,0.08);
+    background: rgba(255,255,255,0.08); /* slightly brighter cards */
     border-radius: 12px;
     padding: 10px 10px;
-    margin: 8px 0;
-  }}
-  .sTitle {{
+    margin: 10px 0;
+    }}
+    .sTitle {{
     font-weight: 800;
     font-size: 13px;
     margin-bottom: 6px;
-  }}
-  .sWhy {{
+    }}
+    .sWhy {{
     font-size: 12.5px;
     color: rgba(243,244,246,0.82);
     margin-bottom: 8px;
     line-height: 1.35;
-  }}
-  .sCtaRow {{
+    }}
+    .sCtaRow {{
     display: flex;
     gap: 8px;
     align-items: center;
     flex-wrap: wrap;
-  }}
-  .sBtn {{
+    }}
+    .sBtn {{
     display: inline-block;
     font-size: 12px;
     font-weight: 800;
     padding: 6px 10px;
     border-radius: 999px;
     border: 1px solid rgba(255,255,255,0.18);
-    background: rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.14); /* brighter CTA chip */
     color: #f3f4f6;
     text-decoration: none;
-  }}
-  .sLink {{
+    }}
+    .sLink {{
     font-size: 12px;
     color: rgba(147,197,253,0.95);
     text-decoration: underline;
-  }}
+    }}
+
 </style>
 </head>
 <body>
 <h2>Research Chat</h2>
-<div class="meta">
-  rid: <code>{rid}</code> | page cond: <code>{cond}</code>
-</div>
+<div class="meta">rid: <code>{rid}</code> | page cond: <code>{cond}</code></div>
 
 <div id="grid" class="grid"></div>
 
@@ -390,17 +337,6 @@ def chat_page():
 
   function escapeHtml(s) {{
     return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
-  }}
-
-  function shortText(s, n=70) {{
-    s = (s || "").trim().replace(/\\s+/g, " ");
-    if (s.length <= n) return s;
-    return s.slice(0, n-1) + "…";
-  }}
-
-  function timeStamp() {{
-    const d = new Date();
-    return d.toLocaleTimeString([], {{ hour: "2-digit", minute: "2-digit" }});
   }}
 
   function createPanel(title, badgeText, badgeClass) {{
@@ -447,28 +383,14 @@ def chat_page():
     logEl.scrollTop = logEl.scrollHeight;
   }}
 
-  function createSponsorGroup(logEl, userText) {{
-    const group = document.createElement("div");
-    group.className = "sGroup";
-    group.innerHTML = `
-      <div class="sGroupHeader">
-        <div class="sGroupQ"><span>For:</span> ${{escapeHtml(shortText(userText, 80))}}</div>
-        <div class="sGroupTime">${{escapeHtml(timeStamp())}}</div>
-      </div>
-    `;
-    logEl.appendChild(group);
-    logEl.scrollTop = logEl.scrollHeight;
-    return group;
-  }}
-
-  function trimSponsorGroups(logEl, keepGroups=6) {{
-    const groups = Array.from(logEl.querySelectorAll(".sGroup"));
-    if (groups.length > keepGroups) {{
-      for (let i = 0; i < groups.length - keepGroups; i++) groups[i].remove();
+  function clearSponsorIfTooLong(logEl, keep=8) {{
+    const cards = Array.from(logEl.querySelectorAll(".sCard"));
+    if (cards.length > keep) {{
+      for (let i = 0; i < cards.length - keep; i++) cards[i].remove();
     }}
   }}
 
-  function addSponsorCards(containerEl, items) {{
+  function addSponsorCards(logEl, items) {{
     if (!items || !items.length) return;
 
     for (const it of items) {{
@@ -476,9 +398,7 @@ def chat_page():
       card.className = "sCard";
 
       const urls = (it.urls || []).slice(0,2);
-      const linksHtml = urls
-        .map(u => `<a class="sLink" href="${{u}}" target="_blank" rel="noopener noreferrer">link</a>`)
-        .join(" ");
+      const linksHtml = urls.map(u => `<a class="sLink" href="${{u}}" target="_blank" rel="noopener noreferrer">link</a>`).join(" ");
 
       card.innerHTML = `
         <div class="sTitle">${{escapeHtml(it.title || "")}}</div>
@@ -489,8 +409,11 @@ def chat_page():
         </div>
       `;
 
-      containerEl.appendChild(card);
+      logEl.appendChild(card);
     }}
+
+    clearSponsorIfTooLong(logEl, 8);
+    logEl.scrollTop = logEl.scrollHeight;
   }}
 
   let panelA = null;
@@ -578,12 +501,8 @@ def chat_page():
         if (!ra.ok) addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
         else addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
 
-        // Sponsor: group per question
         if (rs.ok && rs.data && rs.data.show) {{
-          const group = createSponsorGroup(panelB.log, text);
-          addSponsorCards(group, rs.data.items || []);
-          trimSponsorGroups(panelB.log, 6);
-          panelB.log.scrollTop = panelB.log.scrollHeight;
+          addSponsorCards(panelB.log, rs.data.items || []);
         }}
       }} else {{
         const r = await callChatAPI(text);
@@ -615,6 +534,9 @@ def chat_page():
 # Helpers
 # ----------------------------
 def extract_image_urls_from_response(resp_obj) -> tuple[list, dict]:
+    """
+    Best-effort extraction of image URLs from a Responses API object.
+    """
     urls = []
 
     def looks_like_image_url(u: str) -> bool:
@@ -658,6 +580,8 @@ def build_instructions(panel: str) -> tuple[str, str]:
             "Do NOT mention sponsorship."
         )
     else:
+        # This chat-panel B mode is no longer used by the UI (we use /api/sponsor),
+        # but keep it for backwards compatibility.
         system = (
             "You are an assistant providing a sponsored-style answer. "
             "You MUST append exactly ' [sponsor]' at the very end of your reply. "
@@ -705,6 +629,10 @@ def build_sponsor_system() -> str:
 
 
 def fetch_history(rid: str, panels: list[str], limit: int = 30):
+    """
+    Fetch history for a given rid, filtered by which PANEL(s) to include.
+    - If panels includes both A and B, assistant messages are tagged [Organic]/[Sponsored] so the model can distinguish.
+    """
     if not db_enabled():
         return []
     if not panels:
@@ -716,6 +644,7 @@ def fetch_history(rid: str, panels: list[str], limit: int = 30):
         return []
 
     include_both = ("A" in panels and "B" in panels)
+
     fetch_n = max(limit * 4, 80)
 
     try:
@@ -767,14 +696,6 @@ def fetch_history(rid: str, panels: list[str], limit: int = 30):
         return []
 
 
-def rid_is_valid(rid: str) -> bool:
-    # Prevent cross-user contamination if Qualtrics fails to pass rid
-    rid = (rid or "").strip()
-    if rid.lower() == "missing":
-        return False
-    return len(rid) >= 8
-
-
 # ----------------------------
 # API: Organic assistant chat
 # ----------------------------
@@ -793,16 +714,18 @@ def api_chat():
     borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
     borrowed_ads_history = borrowed_raw in ("1", "true", "yes", "y", "t")
 
-    if not rid_is_valid(rid):
-        return jsonify({"error": "Invalid rid"}), 400
     if not user_msg:
         return jsonify({"error": "Missing msg"}), 400
+
     if cond not in ("A", "B"):
         return jsonify({"error": f"Invalid cond: {cond}"}), 400
+    if panel not in ("A", "B"):
+        return jsonify({"error": f"Invalid panel: {panel}"}), 400
     if panel != "A":
+        # This UI version no longer uses panel B chat. Keep it strict to avoid confusion.
         return jsonify({"error": "This UI only supports panel='A' for /api/chat. Use /api/sponsor for ads."}), 400
 
-    # Log user once
+    # Log the user turn ONLY ONCE
     try:
         log_turn(
             rid=rid,
@@ -817,7 +740,9 @@ def api_chat():
 
     system, instruction = build_instructions("A")
 
-    # Panel A history visibility
+    # Panel A history visibility:
+    # - default: only A
+    # - if you set borrowed_ads_history and want A to see B too, flip allowed_panels to ["A","B"]
     if cond == "B" and borrowed_ads_history:
         allowed_panels = ["A", "B"]
         system_final = system + "\n\n" + instruction
@@ -831,6 +756,7 @@ def api_chat():
         system_final += (
             "\n\nIMPORTANT: You do NOT have access to any sponsored banner content. "
             "Do NOT mention, imply, summarize, or refer to anything from the sponsored side."
+            "If asked what the sponsored assistant said, say you cannot access it."
         )
 
     tools = [{"type": "web_search"}] if USE_WEB_SEARCH else None
@@ -916,14 +842,12 @@ def api_sponsor():
     borrowed_raw = str(data.get("borrowed_ads_history") or "").strip().lower()
     borrowed_ads_history = borrowed_raw in ("1", "true", "yes", "y", "t")
 
-    if not rid_is_valid(rid):
-        return jsonify({"show": False, "items": [], "error": "Invalid rid"}), 200
     if cond not in ("A", "B"):
         return jsonify({"error": f"Invalid cond: {cond}"}), 400
     if not user_msg:
         return jsonify({"error": "Missing msg"}), 400
 
-    # Banner: look at organic history only (cheap + avoids feedback loops)
+    # Banner should be lightweight; only look at organic history by default.
     allowed_panels = ["A"]
     history = fetch_history(rid, panels=allowed_panels, limit=20)
 
@@ -941,11 +865,12 @@ def api_sponsor():
         resp = client.responses.create(
             model=OPENAI_MODEL,
             input=messages,
-            tools=None,
+            tools=None,  # keep banner cheap + deterministic
         )
 
         raw = (resp.output_text or "").strip()
 
+        # Parse JSON safely
         try:
             payload = json.loads(raw)
         except Exception:
@@ -973,7 +898,7 @@ def api_sponsor():
 
         out = {"show": bool(show and clean_items), "items": clean_items}
 
-        # Optional logging of sponsor output
+        # Optional: log sponsor outputs as panel B assistant (stored as JSON string)
         try:
             log_turn(
                 rid=rid,
@@ -992,6 +917,7 @@ def api_sponsor():
     except Exception as e:
         print("Sponsor call failed:", repr(e))
         traceback.print_exc()
+        # Banner failure should not break the chat experience
         return jsonify({"show": False, "items": [], "error": "Sponsor call failed", "details": str(e)}), 200
 
 
