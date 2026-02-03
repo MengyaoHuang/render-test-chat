@@ -337,22 +337,6 @@ def chat_page():
       font-weight: 600;
     }}
 
-    /* NEW: bubble-like wrapper for sponsor section header */
-    .sSectionPad {{
-    margin: 12px 0;               /* <-- vertical blank space before/after */
-    display: flex;
-    justify-content: flex-start;   /* left aligned like cards */
-    }}
-
-    .sSectionBubble {{
-    max-width: 78%;                /* <-- same as .bubble */
-    padding: 10px 12px;
-    border-radius: 14px;
-    border: 1px solid rgba(255,255,255,0.14);
-    background: rgba(255,255,255,0.06);
-    }}
-
-
 </style>
 </head>
 <body>
@@ -448,25 +432,18 @@ def chat_page():
     const section = document.createElement("div");
     section.className = "sSection";
 
-    const pad = document.createElement("div");
-    pad.className = "sSectionPad";
-
-    const bubble = document.createElement("div");
-    bubble.className = "sSectionBubble";
+    const header = document.createElement("div");
+    header.className = "sSectionHeader";
 
     const q = (userText || "").trim();
     const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
 
-    const header = document.createElement("div");
-    header.className = "sSectionHeader";
     header.innerHTML = `
-    <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
-    <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
+      <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
+      <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
     `;
 
-    bubble.appendChild(header);
-    pad.appendChild(bubble);
-    section.appendChild(pad);
+    section.appendChild(header);
 
     for (const it of items) {{
       const card = document.createElement("div");
