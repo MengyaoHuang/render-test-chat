@@ -439,35 +439,45 @@ def chat_page():
     const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
 
     header.innerHTML = `
-      <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
-      <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
+        <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
+        <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
     `;
 
     section.appendChild(header);
 
     for (const it of items) {{
-      const card = document.createElement("div");
-      card.className = "sCard";
+        const card = document.createElement("div");
+        card.className = "sCard";
 
-      const urls = (it.urls || []).slice(0,2);
-      const linksHtml = urls.map(u => `<a class="sLink" href="${{u}}" target="_blank" rel="noopener noreferrer">link</a>`).join(" ");
+        // Use ONLY the first URL (no separate "link" anchors)
+        const primaryUrl =
+        (it && Array.isArray(it.urls) && it.urls.length && String(it.urls[0]).trim())
+            ? String(it.urls[0]).trim()
+            : "";
 
-      card.innerHTML = `
-        <div class="sTitle">${{escapeHtml(it.title || "")}}</div>
-        <div class="sWhy">${{escapeHtml(it.why || "")}}</div>
+        const ctaText = escapeHtml(it && it.cta ? it.cta : "Learn more");
+
+        // CTA pill becomes the clickable link when URL exists
+        const ctaHtml = primaryUrl
+        ? `<a class="sBtn" href="${{primaryUrl}}" target="_blank" rel="noopener noreferrer">${{ctaText}}</a>`
+        : `<span class="sBtn" aria-disabled="true" style="opacity:0.7; cursor:default;">${{ctaText}}</span>`;
+
+        card.innerHTML = `
+        <div class="sTitle">${{escapeHtml(it && it.title ? it.title : "")}}</div>
+        <div class="sWhy">${{escapeHtml(it && it.why ? it.why : "")}}</div>
         <div class="sCtaRow">
-          <span class="sBtn">${{escapeHtml(it.cta || "Learn more")}}</span>
-          ${{linksHtml}}
+            ${{ctaHtml}}
         </div>
-      `;
+        `;
 
-      section.appendChild(card);
+        section.appendChild(card);
     }}
 
     logEl.appendChild(section);
     trimSponsorSections(logEl, 6);
     logEl.scrollTop = logEl.scrollHeight;
-  }}
+    }}
+
 
   let panelA = null;
   let panelB = null;
