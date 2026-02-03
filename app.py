@@ -454,6 +454,9 @@ def chat_page():
     const bubble = document.createElement("div");
     bubble.className = "sSectionBubble";
 
+    const q = (userText || "").trim();
+    const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
+
     const header = document.createElement("div");
     header.className = "sSectionHeader";
     header.innerHTML = `
