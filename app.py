@@ -743,8 +743,11 @@ def build_instructions(panel: str) -> tuple[str, str]:
         "Answer in 2-4 sentences.\n"
         "If the user asks about products, where to buy, prices, comparisons, or requests links/sources, "
         "you MUST use web search and include 2-4 REAL URLs. "
+        "- IMPORTANT: DO NOT use Amazon or any Amazon-owned shopping links.\n"
+        "  Forbidden domains include: amazon.com, amzn.to, a.co, smile.amazon.*, aws.amazon.*, "
+        "  and any URL whose hostname contains 'amazon'.\n"
         "Prefer official brand sites and reputable retailers. Do not invent links.\n"
-        "If the user does NOT ask for product info or links, answer normally without adding links."
+        "Do NOT mention [Organic] anywhere."
     )
     return system, instruction
 
@@ -762,9 +765,13 @@ def build_sponsor_system() -> str:
         '  {"show": true, "items": [ ... ] }\n'
         "- Do NOT write prose outside JSON. Do NOT wrap in markdown.\n"
         "- Max 3 items.\n"
-        "- Items must be meaningfully DIFFERENT from each other (different product/service; not minor variants).\n"
+        "- Items must be meaningfully DIFFERENT from each other.\n"
         "- Each item MUST include at least 1 REAL URL that exists on the public internet.\n"
-        "  Use web search to choose URLs; do not invent URLs.\n\n"
+        "  Use web search to choose URLs; do not invent URLs.\n"
+        "- IMPORTANT: DO NOT use Amazon or any Amazon-owned shopping links.\n"
+        "  Forbidden domains include: amazon.com, amzn.to, a.co, smile.amazon.*, aws.amazon.*, "
+        "  and any URL whose hostname contains 'amazon'.\n"
+        "  Prefer alternative reputable non-Amazon retailers.\n\n"
         "JSON schema:\n"
         "{\n"
         '  "show": boolean,\n'
