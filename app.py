@@ -279,6 +279,42 @@ def chat_page():
     padding: 10px 10px;
     margin: 10px 0;
     }}
+
+  /* --- Sponsor card: force image on the right --- */
+  .sCardRow {{
+    display: flex;
+    flex-direction: row;
+    align-items: center;      /* vertically center logo with content block */
+    justify-content: space-between;
+    gap: 12px;
+  }}
+
+  .sCardMain {{
+    flex: 1 1 auto;
+    min-width: 0;
+  }}
+
+  .sThumbWrap {{
+    flex: 0 0 56px;          /* fixed right column width */
+    width: 56px;
+    height: 56px;
+    border-radius: 12px;
+    border: 1px solid rgba(255,255,255,0.14);
+    background: rgba(255,255,255,0.06);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    overflow: hidden;
+  }}
+
+  .sThumb {{
+    width: 34px;
+    height: 34px;
+    object-fit: contain;
+    display: block;
+    opacity: 0.95;
+  }}
+
     .sTitle {{
     font-weight: 800;
     font-size: 13px;
