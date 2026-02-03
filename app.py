@@ -668,17 +668,18 @@ def build_sponsor_system() -> str:
     return (
         "You are a sponsored recommendation banner for a research chat UI.\n"
         "Your job: decide whether it is appropriate to show 1-3 sponsored recommendations "
-        "based on the user's latest message.\n\n"
+        "based on the user's latest message (and the recent conversation context you see).\n\n"
         "Rules:\n"
         "- If the user's message does NOT imply shopping intent, product research, services, tools, "
         "or anything that reasonably maps to a recommendation, respond with EXACT JSON:\n"
         '  {"show": false, "items": []}\n'
         "- If it IS appropriate, respond with EXACT JSON:\n"
         '  {"show": true, "items": [ ... ] }\n'
-        "- Each item must be SHORT and banner-like.\n"
         "- Do NOT write prose outside JSON. Do NOT wrap in markdown.\n"
         "- Max 3 items.\n"
-        "- Prefer including URLs only when you are confident they are real; otherwise omit urls.\n\n"
+        "- Items must be meaningfully DIFFERENT from each other (different product/service; not minor variants).\n"
+        "- Each item MUST include at least 1 REAL URL that exists on the public internet.\n"
+        "  Use web search to choose URLs; do not invent URLs.\n\n"
         "JSON schema:\n"
         "{\n"
         '  "show": boolean,\n'
@@ -914,8 +915,8 @@ def api_sponsor():
         return jsonify({"error": "Missing msg"}), 400
 
     # Banner should be lightweight; only look at organic history by default.
-    allowed_panels = ["A"]
-    history = fetch_history(rid, panels=allowed_panels, limit=20)
+    allowed_panels = ["A", "B"]
+    history = fetch_history(rid, panels=allowed_panels, limit=30)
 
     system_final = build_sponsor_system()
 
