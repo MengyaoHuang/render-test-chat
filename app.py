@@ -399,6 +399,22 @@ def chat_page():
     return (s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
   }}
 
+  function renderRichText(s) {{
+    // 1) Escape everything first (prevents XSS)
+    let out = escapeHtml(s || "");
+
+    // 2) Bold: **text**
+    out = out.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+    // 3) Clickable links: http(s)://...
+    out = out.replace(
+      /(https?:\/\/[^\s<>"']+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+
+    return out;
+  }}
+
   function createPanel(title, badgeText, badgeClass) {{
     const panel = document.createElement("div");
     panel.className = "panel";
@@ -426,7 +442,7 @@ def chat_page():
     bubble.className = "bubble";
 
     let html = `<div class="label">${{escapeHtml(label)}}</div>`;
-    html += `<div>${{escapeHtml(text)}}</div>`;
+    html += `<div>${{renderRichText(text)}}</div>`;
 
     if (imageUrls && imageUrls.length) {{
       html += '<div class="links"><b>Images:</b> ';
