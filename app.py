@@ -313,6 +313,30 @@ def chat_page():
     text-decoration: underline;
     }}
 
+    /* ------- NEW: Sponsor sections grouped by triggering question ------- */
+    .sSection {{
+      border-top: 1px solid rgba(255,255,255,0.10);
+      margin-top: 10px;
+      padding-top: 10px;
+    }}
+    .sSectionHeader {{
+      font-size: 12px;
+      font-weight: 800;
+      color: rgba(243,244,246,0.92);
+      margin-bottom: 8px;
+      line-height: 1.35;
+    }}
+    .sSectionHeader .q {{
+      font-weight: 700;
+      color: rgba(243,244,246,0.78);
+    }}
+    .sTime {{
+      font-size: 11px;
+      color: rgba(243,244,246,0.55);
+      margin-top: 2px;
+      font-weight: 600;
+    }}
+
 </style>
 </head>
 <body>
@@ -383,15 +407,43 @@ def chat_page():
     logEl.scrollTop = logEl.scrollHeight;
   }}
 
-  function clearSponsorIfTooLong(logEl, keep=8) {{
-    const cards = Array.from(logEl.querySelectorAll(".sCard"));
-    if (cards.length > keep) {{
-      for (let i = 0; i < cards.length - keep; i++) cards[i].remove();
+  // -------- NEW: Sponsor results are grouped into sections per user question --------
+  function nowTimeStr() {{
+    const d = new Date();
+    return d.toLocaleTimeString([], {{ hour: "2-digit", minute: "2-digit" }});
+  }}
+
+  function removeSponsorHint(logEl) {{
+    const hint = logEl.querySelector(".sponsorHint");
+    if (hint) hint.remove();
+  }}
+
+  // Keep last K sponsor sections (not cards)
+  function trimSponsorSections(logEl, keepSections = 6) {{
+    const sections = Array.from(logEl.querySelectorAll(".sSection"));
+    if (sections.length > keepSections) {{
+      for (let i = 0; i < sections.length - keepSections; i++) sections[i].remove();
     }}
   }}
 
-  function addSponsorCards(logEl, items) {{
+  function addSponsorSection(logEl, userText, items) {{
     if (!items || !items.length) return;
+
+    const section = document.createElement("div");
+    section.className = "sSection";
+
+    const header = document.createElement("div");
+    header.className = "sSectionHeader";
+
+    const q = (userText || "").trim();
+    const qShort = q.length > 120 ? q.slice(0, 117) + "..." : q;
+
+    header.innerHTML = `
+      <div>Sponsored results <span class="q">for: "${{escapeHtml(qShort)}}"</span></div>
+      <div class="sTime">${{escapeHtml(nowTimeStr())}}</div>
+    `;
+
+    section.appendChild(header);
 
     for (const it of items) {{
       const card = document.createElement("div");
@@ -409,10 +461,11 @@ def chat_page():
         </div>
       `;
 
-      logEl.appendChild(card);
+      section.appendChild(card);
     }}
 
-    clearSponsorIfTooLong(logEl, 8);
+    logEl.appendChild(section);
+    trimSponsorSections(logEl, 6);
     logEl.scrollTop = logEl.scrollHeight;
   }}
 
@@ -501,8 +554,10 @@ def chat_page():
         if (!ra.ok) addBlock(panelA.log, "ai", "AI (error)", ra.data.error || "Request failed");
         else addBlock(panelA.log, "ai", "AI", ra.data.reply || "", ra.data.image_urls || []);
 
+        // NEW: show sponsor results as a section tied to this user message
         if (rs.ok && rs.data && rs.data.show) {{
-          addSponsorCards(panelB.log, rs.data.items || []);
+          removeSponsorHint(panelB.log);
+          addSponsorSection(panelB.log, text, rs.data.items || []);
         }}
       }} else {{
         const r = await callChatAPI(text);
@@ -578,6 +633,7 @@ def build_instructions(panel: str) -> tuple[str, str]:
         system = (
             "You are an assistant providing an organic, neutral answer. "
             "Do NOT mention sponsorship."
+            "Do NOT mention [Organic] anywhere."
         )
     else:
         # This chat-panel B mode is no longer used by the UI (we use /api/sponsor),
